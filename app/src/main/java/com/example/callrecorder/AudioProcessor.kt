@@ -99,7 +99,7 @@ object AudioProcessor {
                 }
                 size *= 2
             }
-            if (inverse) for (i in 0 until n) { re[i] /= n; im[i] /= n }
+            if (inverse) for (i in 0 until n) { re[i] = re[i] / n.toDouble(); im[i] = im[i] / n.toDouble() }
         }
     }
 
@@ -136,7 +136,7 @@ object AudioProcessor {
             fft.transform(re, im, false)
             for (k in 0 until bins) noise[k] += sqrt(re[k] * re[k] + im[k] * im[k])
         }
-        for (k in 0 until bins) noise[k] /= noiseFrames.size
+        for (k in 0 until bins) noise[k] = noise[k] / noiseFrames.size.toDouble()
         progress(0.15f)
 
         // مرحله ۲: تفریق طیفی با هموارسازی گین

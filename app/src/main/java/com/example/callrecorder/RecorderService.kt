@@ -40,6 +40,7 @@ class RecorderService : Service() {
         private const val NOTIF_ID = 77
 
         @Volatile var isRecording = false
+        @Volatile var startTime = 0L
         @Volatile var startedAuto = false
         @Volatile var activeSource = "-"
         @Volatile var level = 0
@@ -94,7 +95,7 @@ class RecorderService : Service() {
             this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
         val n: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.drawable.ic_mic)
             .setContentTitle("در حال ضبط مکالمه")
             .setContentIntent(open)
             .addAction(0, "توقف", stop)
@@ -171,6 +172,7 @@ class RecorderService : Service() {
 
         try {
             writer = WavWriter(file, sr)
+            startTime = System.currentTimeMillis()
             isRecording = true
             val chain = buildChain(prefs.sourceMode)
             var idx = 0

@@ -28,8 +28,21 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("liveGainDb", 0)
         set(v) = sp.edit().putInt("liveGainDb", v).apply()
 
+    /** 0 = سیستم، 1 = روشن، 2 = تاریک */
+    var themeMode: Int
+        get() = sp.getInt("themeMode", 0)
+        set(v) = sp.edit().putInt("themeMode", v).apply()
+
     companion object {
-        class Source(val id: Int, val label: String)
+        fun nightModeFor(mode: Int): Int = when (mode) {
+            1 -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO
+            2 -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+            else -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+        }
+
+        class Source(val id: Int, val label: String) {
+            val short: String get() = label.substringBefore(" (")
+        }
 
         val SOURCES = listOf(
             Source(MediaRecorder.AudioSource.VOICE_CALL, "VOICE_CALL (هر دو طرف، فقط برخی دستگاه‌ها)"),

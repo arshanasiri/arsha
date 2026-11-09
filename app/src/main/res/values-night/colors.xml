@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#0F0D18</color>
+    <color name="surface">#171424</color>
+    <color name="card">#1E1A30</color>
+    <color name="surface_variant">#2A2542</color>
+    <color name="primary">#B2A2FF</color>
+    <color name="on_primary">#20104F</color>
+    <color name="primary_container">#3A2F7A</color>
+    <color name="on_primary_container">#E6DEFF</color>
+    <color name="accent">#FF6B87</color>
+    <color name="text">#F1EEFB</color>
+    <color name="text_secondary">#A9A4C4</color>
+    <color name="outline">#352F52</color>
+    <color name="grad_start">#6B4DF0</color>
+    <color name="grad_end">#E0447F</color>
+    <color name="rec_start">#FF5A5F</color>
+    <color name="rec_end">#C2185B</color>
+</resources>

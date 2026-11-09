@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -24,3 +27,9 @@ jobs:
         with:
           name: CallRecorder-apk
           path: app/build/outputs/apk/release/*.apk
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk CallRecorder.apk
+          gh release create "v1.0-${{ github.run_number }}" CallRecorder.apk --title "Call Recorder Pro build ${{ github.run_number }}" --notes "Automated APK build"

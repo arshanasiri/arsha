@@ -117,14 +117,14 @@
                 app:iconTint="@color/text_secondary" />
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnDelete"
+                android:id="@+id/btnMore"
                 style="@style/Widget.Material3.Button.IconButton"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
-                android:contentDescription="delete"
-                app:icon="@drawable/ic_delete"
+                android:contentDescription="more"
+                app:icon="@drawable/ic_more"
                 app:iconSize="22dp"
-                app:iconTint="@color/accent" />
+                app:iconTint="@color/text_secondary" />
         </LinearLayout>
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

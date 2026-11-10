@@ -142,7 +142,7 @@ object AudioProcessor {
         // مرحله ۲: تفریق طیفی با هموارسازی گین
         val alpha = 1.0 + 2.5 * strength
         val floor = 0.12 - 0.10 * strength
-        val out = DoubleArray(padded.size)
+        val out = FloatArray(padded.size)
         val prevGain = DoubleArray(bins) { 1.0 }
         val gain = DoubleArray(bins)
         val smoothed = DoubleArray(bins)
@@ -168,10 +168,10 @@ object AudioProcessor {
                 if (k in 1 until n / 2) { re[n - k] = re[k]; im[n - k] = -im[k] }
             }
             fft.transform(re, im, true)
-            for (i in 0 until n) out[s + i] += re[i] * win[i] / 1.5
+            for (i in 0 until n) out[s + i] += (re[i] * win[i] / 1.5).toFloat()
             if (f % 200 == 0) progress(0.15f + 0.6f * f / frames)
         }
-        return FloatArray(x.size) { out[n + it].toFloat() }
+        return FloatArray(x.size) { out[n + it] }
     }
 
     // ---------------- کمپرسور ----------------

@@ -139,7 +139,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="ضبط خودکار با تماس"
+                            android:text="ضبط خودکار با تماس (آماده‌باش)"
                             android:textColor="@color/text"
                             android:textSize="15sp"
                             android:textStyle="bold" />
@@ -147,7 +147,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="با شروع تماس ضبط می‌شود و با پایانش متوقف می‌شود"
+                            android:text="یک اعلان دائمی نشان داده می‌شود؛ با شروع تماس ضبط شروع می‌شود"
                             android:textColor="@color/text_secondary"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -266,7 +266,7 @@
                     android:layout_marginStart="12dp"
                     android:layout_weight="1"
                     android:lineSpacingExtra="3dp"
-                    android:text="برای ضبط صدای هر دو طرف، تماس را روی بلندگو بزنید. اگر منبعی توسط سیستم مسدود شود، برنامه خودکار منبع بعدی را امتحان می‌کند."
+                    android:text="برای ضبط صدای هر دو طرف، تماس را روی بلندگو بگذارید. اگر ضبط بی‌صدا بود، در تنظیمات «تست منابع صدا» را بزنید."
                     android:textColor="@color/on_primary_container"
                     android:textSize="12.5sp" />
             </LinearLayout>

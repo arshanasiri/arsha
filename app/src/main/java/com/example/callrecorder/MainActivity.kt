@@ -2,7 +2,11 @@ package com.example.callrecorder
 
 import android.Manifest
 import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
 import android.animation.ValueAnimator
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
@@ -12,27 +16,33 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.MediaStore
 import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.animation.AccelerateDecelerateInterpolator
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.FileProvider
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.slider.Slider
+import com.google.android.material.snackbar.Snackbar
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -47,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pageRecord: View
     private lateinit var pageLibrary: View
     private lateinit var pageSettings: View
+    private lateinit var bottomNav: BottomNavigationView
 
     // ضبط
     private lateinit var tvTimer: TextView
@@ -58,31 +69,39 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recButton: FrameLayout
     private lateinit var imgRec: ImageView
     private lateinit var ring: View
+    private lateinit var swAuto: MaterialSwitch
     private var pulse: ObjectAnimator? = null
     private var ringAnim: ValueAnimator? = null
     private var lastRecording = false
+    private var lastEventSeq = RecorderService.eventSeq
+    private var armToggledAt = 0L
+    private var syncingSwitch = false
 
     // کتابخانه
     private lateinit var listBox: LinearLayout
     private lateinit var emptyView: View
-    private lateinit var tvCount: TextView
+    private lateinit var statsCard: View
+    private lateinit var statCount: TextView
+    private lateinit var statTime: TextView
+    private lateinit var statSize: TextView
 
     // پلیر
     private lateinit var playerBar: View
     private lateinit var btnPlayPause: MaterialButton
-    private lateinit var playerSlider: Slider
+    private lateinit var btnSpeed: MaterialButton
+    private lateinit var waveView: WaveformView
     private lateinit var tvPlayerTitle: TextView
     private lateinit var tvPlayerCur: TextView
     private lateinit var tvPlayerTotal: TextView
     private var player: MediaPlayer? = null
     private var playingPath: String? = null
-    private var userSeeking = false
+    private var speedIdx = 0
+    private val speeds = floatArrayOf(1f, 1.25f, 1.5f, 2f, 0.75f)
 
     // تنظیمات
     private lateinit var tvSourceValue: TextView
     private lateinit var tvRateValue: TextView
     private lateinit var tvGainValue: TextView
-
     private val rates = listOf(8000, 16000, 44100, 48000)
 
     // ------------------------------------------------------------------ onCreate
@@ -91,6 +110,11 @@ class MainActivity : AppCompatActivity() {
         prefs = Prefs(this)
         setContentView(R.layout.activity_main)
 
+        // میان‌بُرها (برای تست خودکار و شورت‌کات): arm = فعال‌سازی آماده‌باش، skipIntro = بدون راهنمای اول
+        if (intent.getBooleanExtra("skipIntro", false)) prefs.firstRunDone = true
+        if (intent.getBooleanExtra("arm", false)) prefs.autoRecord = true
+
+        bottomNav = findViewById(R.id.bottomNav)
         pageRecord = findViewById(R.id.pageRecord)
         pageLibrary = findViewById(R.id.pageLibrary)
         pageSettings = findViewById(R.id.pageSettings)
@@ -111,16 +135,74 @@ class MainActivity : AppCompatActivity() {
         }
 
         requestNeededPermissions()
+        // اگر حالت آماده‌باش قبلاً فعال بوده، حالا که برنامه روی صفحه است دوباره فعالش کن
+        if (prefs.autoRecord && !RecorderService.isArmed && hasPhonePerms()) {
+            RecorderService.send(this, RecorderService.ACTION_ARM)
+        }
         refreshList()
         tick()
+        ui.post { showStartupDialogs() }
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    private fun hasPhonePerms() =
+        checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED &&
+            checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+
+    private fun snack(msg: String, long: Boolean = true) {
+        val sb = Snackbar.make(
+            findViewById(android.R.id.content), msg,
+            if (long) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
+        )
+        sb.setAnchorView(R.id.bottomNav)
+        sb.view.findViewById<TextView>(com.google.android.material.R.id.snackbar_text)?.maxLines = 6
+        sb.show()
+    }
+
+    // ------------------------------------------------------------------ دیالوگ‌های شروع
+    private fun showStartupDialogs() {
+        if (isFinishing || isDestroyed) return
+        val crash = CrashLogger.pending(this)
+        if (crash != null) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("برنامه دفعه‌ی قبل بسته شد")
+                .setMessage("جزئیات خطا ذخیره شده است. با «کپی» می‌توانید آن را برای توسعه‌دهنده بفرستید.\n\n" +
+                    crash.take(900))
+                .setPositiveButton("کپی") { _, _ ->
+                    val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("crash", crash))
+                    CrashLogger.clear(this)
+                    Toast.makeText(this, "کپی شد", Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("بستن") { _, _ -> CrashLogger.clear(this) }
+                .setOnCancelListener { CrashLogger.clear(this) }
+                .show()
+            return
+        }
+        if (!prefs.firstRunDone) {
+            prefs.firstRunDone = true
+            showHelpDialog()
+        }
+    }
+
+    private fun showHelpDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("راهنمای ضبط تماس")
+            .setMessage(
+                "۱. دکمه‌ی ضبط را بزنید یا «ضبط خودکار با تماس» را روشن کنید.\n\n" +
+                "۲. در حین تماس، بلندگو را روشن کنید تا صدای طرف مقابل هم با میکروفون ضبط شود.\n\n" +
+                "۳. اندروید جلوی دسترسی مستقیم برنامه‌ها به صدای خط تماس را گرفته؛ برنامه به‌طور خودکار " +
+                "چند منبع صدا را امتحان می‌کند. اگر ضبط بی‌صدا بود در تنظیمات «تست منابع صدا» را بزنید.\n\n" +
+                "۴. برای ضبط خودکار، برنامه را یک‌بار باز کنید و استثنای باتری را بدهید."
+            )
+            .setPositiveButton("متوجه شدم", null)
+            .show()
+    }
+
     // ------------------------------------------------------------------ ناوبری
     private fun setupNav() {
-        val nav = findViewById<BottomNavigationView>(R.id.bottomNav)
-        nav.setOnItemSelectedListener {
+        bottomNav.setOnItemSelectedListener {
             pageRecord.visibility = if (it.itemId == R.id.nav_record) View.VISIBLE else View.GONE
             pageLibrary.visibility = if (it.itemId == R.id.nav_library) View.VISIBLE else View.GONE
             pageSettings.visibility = if (it.itemId == R.id.nav_settings) View.VISIBLE else View.GONE
@@ -140,12 +222,29 @@ class MainActivity : AppCompatActivity() {
         recButton = pageRecord.findViewById(R.id.recButton)
         imgRec = pageRecord.findViewById(R.id.imgRec)
         ring = pageRecord.findViewById(R.id.ring)
+        swAuto = pageRecord.findViewById(R.id.swAuto)
 
         recButton.setOnClickListener { toggleRecording() }
 
-        pageRecord.findViewById<MaterialSwitch>(R.id.swAuto).apply {
-            isChecked = prefs.autoRecord
-            setOnCheckedChangeListener { _, c -> prefs.autoRecord = c }
+        syncingSwitch = true
+        swAuto.isChecked = prefs.autoRecord
+        syncingSwitch = false
+        swAuto.setOnCheckedChangeListener { _, checked ->
+            if (syncingSwitch) return@setOnCheckedChangeListener
+            armToggledAt = System.currentTimeMillis()
+            if (checked) {
+                if (!hasPhonePerms()) {
+                    syncingSwitch = true; swAuto.isChecked = false; syncingSwitch = false
+                    requestNeededPermissions()
+                    snack("اول مجوزهای میکروفون و وضعیت تلفن را بدهید، بعد دوباره روشن کنید")
+                } else {
+                    prefs.autoRecord = true
+                    RecorderService.send(this, RecorderService.ACTION_ARM)
+                }
+            } else {
+                prefs.autoRecord = false
+                RecorderService.send(this, RecorderService.ACTION_DISARM)
+            }
         }
         pageRecord.findViewById<MaterialSwitch>(R.id.swSpeaker).apply {
             isChecked = prefs.forceSpeaker
@@ -155,26 +254,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleRecording() {
         if (RecorderService.isRecording) {
-            startService(Intent(this, RecorderService::class.java).setAction(RecorderService.ACTION_STOP))
+            RecorderService.send(this, RecorderService.ACTION_STOP)
         } else {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 requestNeededPermissions(); return
             }
-            startForegroundService(
-                Intent(this, RecorderService::class.java).setAction(RecorderService.ACTION_START)
-            )
+            RecorderService.send(this, RecorderService.ACTION_START)
         }
     }
 
     private fun applyRecordingVisuals(rec: Boolean) {
         recButton.setBackgroundResource(if (rec) R.drawable.bg_rec_active else R.drawable.bg_hero_btn)
         imgRec.setImageResource(if (rec) R.drawable.ic_stop else R.drawable.ic_mic)
+        pulse?.cancel(); ringAnim?.cancel()
         if (rec) {
-            pulse?.cancel()
             pulse = ObjectAnimator.ofPropertyValuesHolder(
                 recButton,
-                android.animation.PropertyValuesHolder.ofFloat("scaleX", 1f, 1.06f),
-                android.animation.PropertyValuesHolder.ofFloat("scaleY", 1f, 1.06f)
+                PropertyValuesHolder.ofFloat("scaleX", 1f, 1.06f),
+                PropertyValuesHolder.ofFloat("scaleY", 1f, 1.06f)
             ).apply {
                 duration = 700
                 repeatCount = ValueAnimator.INFINITE
@@ -182,7 +279,6 @@ class MainActivity : AppCompatActivity() {
                 interpolator = AccelerateDecelerateInterpolator()
                 start()
             }
-            ringAnim?.cancel()
             ringAnim = ValueAnimator.ofFloat(0f, 1f).apply {
                 duration = 1300
                 repeatCount = ValueAnimator.INFINITE
@@ -195,8 +291,7 @@ class MainActivity : AppCompatActivity() {
                 start()
             }
         } else {
-            pulse?.cancel(); pulse = null
-            ringAnim?.cancel(); ringAnim = null
+            pulse = null; ringAnim = null
             recButton.scaleX = 1f; recButton.scaleY = 1f
             ring.alpha = 0f
         }
@@ -223,7 +318,7 @@ class MainActivity : AppCompatActivity() {
             tvSource.text = "منبع فعال: " + RecorderService.activeSource.substringBefore(" (")
             levelView.push(RecorderService.level / 100f)
         } else {
-            tvState.text = "آماده‌ی ضبط"
+            tvState.text = if (RecorderService.isArmed) "آماده‌باش · منتظر تماس" else "آماده‌ی ضبط"
             tvSource.text = "منبع صدا: " + if (prefs.sourceMode == 0) "خودکار"
             else Prefs.SOURCES[prefs.sourceMode - 1].short
             levelView.push(0f)
@@ -231,6 +326,19 @@ class MainActivity : AppCompatActivity() {
         val log = RecorderService.log
         logCard.visibility = if (log.isBlank()) View.GONE else View.VISIBLE
         tvLog.text = log.trim()
+
+        // همگام‌سازی کلید آماده‌باش با وضعیت واقعی سرویس
+        if (System.currentTimeMillis() - armToggledAt > 2000 && swAuto.isChecked != RecorderService.isArmed &&
+            (RecorderService.serviceAlive || !prefs.autoRecord)
+        ) {
+            syncingSwitch = true; swAuto.isChecked = RecorderService.isArmed; syncingSwitch = false
+        }
+
+        // پیام نتیجه‌ی ضبط یا خطا
+        if (RecorderService.eventSeq != lastEventSeq) {
+            lastEventSeq = RecorderService.eventSeq
+            snack(RecorderService.eventMsg)
+        }
         updatePlayerProgress()
         ui.postDelayed({ tick() }, 120)
     }
@@ -239,32 +347,31 @@ class MainActivity : AppCompatActivity() {
     private fun setupLibraryPage() {
         listBox = pageLibrary.findViewById(R.id.listBox)
         emptyView = pageLibrary.findViewById(R.id.emptyView)
-        tvCount = pageLibrary.findViewById(R.id.tvCount)
+        statsCard = pageLibrary.findViewById(R.id.statsCard)
+        statCount = pageLibrary.findViewById(R.id.statCount)
+        statTime = pageLibrary.findViewById(R.id.statTime)
+        statSize = pageLibrary.findViewById(R.id.statSize)
     }
-
-    private fun sampleRateOf(f: File): Int = try {
-        f.inputStream().use { s ->
-            val h = ByteArray(28); s.read(h)
-            (h[24].toInt() and 0xFF) or ((h[25].toInt() and 0xFF) shl 8) or
-                ((h[26].toInt() and 0xFF) shl 16) or ((h[27].toInt() and 0xFF) shl 24)
-        }.coerceAtLeast(8000)
-    } catch (_: Throwable) { 16000 }
 
     private fun refreshList() {
         listBox.removeAllViews()
         val files = RecorderService.recordingsDir(this).listFiles { f -> f.extension == "wav" }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
-        tvCount.text = "${files.size} فایل"
         emptyView.visibility = if (files.isEmpty()) View.VISIBLE else View.GONE
+        statsCard.visibility = if (files.isEmpty()) View.GONE else View.VISIBLE
+        var totalMs = 0L
+        var totalBytes = 0L
         val inflater = LayoutInflater.from(this)
         for (f in files) {
+            val dur = WavWriter.durationMs(f)
+            totalMs += dur
+            totalBytes += f.length()
             val row = inflater.inflate(R.layout.item_recording, listBox, false)
-            val secs = if (f.length() > 44) ((f.length() - 44) / 2 / sampleRateOf(f)) else 0L
             val enhanced = f.name.endsWith("_enhanced.wav")
-            row.findViewById<TextView>(R.id.tvName).text =
-                SimpleDateFormat("yyyy/MM/dd  HH:mm", Locale.US).format(Date(f.lastModified()))
+            row.findViewById<TextView>(R.id.tvName).text = niceName(f)
             row.findViewById<TextView>(R.id.tvMeta).text =
-                "${fmt(secs * 1000)} · ${f.length() / 1024} KB"
+                "${fmt(dur)} · ${"%.1f".format(f.length() / 1048576.0)} MB · " +
+                    SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date(f.lastModified()))
             row.findViewById<View>(R.id.tvTag).visibility = if (enhanced) View.VISIBLE else View.GONE
 
             val playing = playingPath == f.absolutePath && player?.isPlaying == true
@@ -275,35 +382,128 @@ class MainActivity : AppCompatActivity() {
             }
             row.findViewById<View>(R.id.btnEnhance).setOnClickListener { showEnhanceSheet(f) }
             row.findViewById<View>(R.id.btnShare).setOnClickListener { share(f) }
-            row.findViewById<View>(R.id.btnDelete).setOnClickListener {
-                AlertDialog.Builder(this)
-                    .setTitle("حذف ضبط")
-                    .setMessage("این فایل برای همیشه حذف شود؟")
-                    .setPositiveButton("حذف") { _, _ ->
-                        if (playingPath == f.absolutePath) closePlayer()
-                        f.delete(); refreshList()
-                    }
-                    .setNegativeButton("لغو", null).show()
-            }
+            row.findViewById<View>(R.id.btnMore).setOnClickListener { v -> showMore(v, f) }
             listBox.addView(row)
+        }
+        statCount.text = files.size.toString()
+        statTime.text = fmt(totalMs)
+        statSize.text = "%.1f MB".format(totalBytes / 1048576.0)
+    }
+
+    private fun niceName(f: File): String {
+        val n = f.nameWithoutExtension
+        return if (n.startsWith("call_")) "مکالمه ${n.removePrefix("call_").removeSuffix("_enhanced").replace('_', ' ')}"
+        else n
+    }
+
+    private fun showMore(anchor: View, f: File) {
+        val m = PopupMenu(this, anchor)
+        m.menu.add(0, 1, 0, "تغییر نام")
+        m.menu.add(0, 2, 1, "ذخیره در پوشه‌ی Music")
+        m.menu.add(0, 3, 2, "اطلاعات فایل")
+        m.menu.add(0, 4, 3, "حذف")
+        m.setOnMenuItemClickListener {
+            when (it.itemId) {
+                1 -> renameFile(f)
+                2 -> exportToMusic(f)
+                3 -> showInfo(f)
+                4 -> confirmDelete(f)
+            }
+            true
+        }
+        m.show()
+    }
+
+    private fun confirmDelete(f: File) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("حذف ضبط")
+            .setMessage("این فایل برای همیشه حذف شود؟")
+            .setPositiveButton("حذف") { _, _ ->
+                if (playingPath == f.absolutePath) closePlayer()
+                f.delete(); refreshList()
+            }
+            .setNegativeButton("لغو", null).show()
+    }
+
+    private fun renameFile(f: File) {
+        val input = EditText(this).apply {
+            setText(f.nameWithoutExtension)
+            setSelectAllOnFocus(true)
+            setPadding(dp(24), dp(16), dp(24), dp(8))
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("تغییر نام")
+            .setView(input)
+            .setPositiveButton("ذخیره") { _, _ ->
+                val clean = input.text.toString().trim().replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                if (clean.isEmpty()) return@setPositiveButton
+                val target = File(f.parentFile, "$clean.wav")
+                when {
+                    target.exists() && target != f -> snack("فایلی با این نام وجود دارد")
+                    f.renameTo(target) -> {
+                        if (playingPath == f.absolutePath) closePlayer()
+                        refreshList()
+                    }
+                    else -> snack("تغییر نام ممکن نشد")
+                }
+            }
+            .setNegativeButton("لغو", null).show()
+    }
+
+    private fun exportToMusic(f: File) {
+        if (Build.VERSION.SDK_INT < 29) {
+            snack("در این نسخه‌ی اندروید از «اشتراک‌گذاری» استفاده کنید"); return
+        }
+        try {
+            val values = ContentValues().apply {
+                put(MediaStore.Audio.Media.DISPLAY_NAME, f.name)
+                put(MediaStore.Audio.Media.MIME_TYPE, "audio/x-wav")
+                put(MediaStore.Audio.Media.RELATIVE_PATH, "Music/CallRecorder")
+                put(MediaStore.Audio.Media.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("insert failed")
+            contentResolver.openOutputStream(uri)?.use { out -> f.inputStream().use { it.copyTo(out) } }
+            values.clear()
+            values.put(MediaStore.Audio.Media.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            snack("در Music/CallRecorder ذخیره شد")
+        } catch (t: Throwable) {
+            snack("ذخیره ممکن نشد: ${t.message}")
         }
     }
 
-    private fun share(f: File) {
-        val uri = FileProvider.getUriForFile(this, "$packageName.files", f)
-        startActivity(
-            Intent.createChooser(
-                Intent(Intent.ACTION_SEND).setType("audio/wav")
-                    .putExtra(Intent.EXTRA_STREAM, uri)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "اشتراک‌گذاری"
+    private fun showInfo(f: File) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("اطلاعات فایل")
+            .setMessage(
+                "نام: ${f.name}\nمدت: ${fmt(WavWriter.durationMs(f))}\n" +
+                    "نرخ نمونه‌برداری: ${WavWriter.sampleRateOf(f)} Hz\n" +
+                    "حجم: ${f.length() / 1024} KB\n\nمسیر:\n${f.absolutePath}"
             )
-        )
+            .setPositiveButton("بستن", null).show()
+    }
+
+    private fun share(f: File) {
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.files", f)
+            startActivity(
+                Intent.createChooser(
+                    Intent(Intent.ACTION_SEND).setType("audio/wav")
+                        .putExtra(Intent.EXTRA_STREAM, uri)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "اشتراک‌گذاری"
+                )
+            )
+        } catch (t: Throwable) {
+            snack("اشتراک‌گذاری ممکن نشد: ${t.message}")
+        }
     }
 
     // ------------------------------------------------------------------ پلیر
     private fun setupPlayer() {
         btnPlayPause = playerBar.findViewById(R.id.btnPlayPause)
-        playerSlider = playerBar.findViewById(R.id.playerSlider)
+        btnSpeed = playerBar.findViewById(R.id.btnSpeed)
+        waveView = playerBar.findViewById(R.id.waveView)
         tvPlayerTitle = playerBar.findViewById(R.id.tvPlayerTitle)
         tvPlayerCur = playerBar.findViewById(R.id.tvPlayerCur)
         tvPlayerTotal = playerBar.findViewById(R.id.tvPlayerTotal)
@@ -315,18 +515,41 @@ class MainActivity : AppCompatActivity() {
             }
         }
         playerBar.findViewById<View>(R.id.btnPlayerClose).setOnClickListener { closePlayer() }
-        playerSlider.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
-            override fun onStartTrackingTouch(slider: Slider) { userSeeking = true }
-            override fun onStopTrackingTouch(slider: Slider) {
-                player?.seekTo(slider.value.toInt()); userSeeking = false
+        playerBar.findViewById<View>(R.id.btnBack).setOnClickListener { seekBy(-10_000) }
+        playerBar.findViewById<View>(R.id.btnFwd).setOnClickListener { seekBy(10_000) }
+        btnSpeed.setOnClickListener {
+            speedIdx = (speedIdx + 1) % speeds.size
+            applySpeed()
+        }
+        waveView.listener = object : WaveformView.Listener {
+            override fun onScrub(fraction: Float) {
+                val d = player?.duration ?: return
+                tvPlayerCur.text = fmt((d * fraction).toLong())
             }
-        })
-        playerSlider.addOnChangeListener { _, value, fromUser ->
-            if (fromUser) tvPlayerCur.text = fmt(value.toLong())
+            override fun onSeek(fraction: Float) {
+                val p = player ?: return
+                p.seekTo((p.duration * fraction).toInt())
+            }
         }
     }
 
-    private fun playFile(f: File) {
+    private fun seekBy(deltaMs: Int) {
+        val p = player ?: return
+        p.seekTo((p.currentPosition + deltaMs).coerceIn(0, p.duration))
+    }
+
+    private fun applySpeed() {
+        val sp = speeds[speedIdx]
+        btnSpeed.text = (if (sp == sp.toInt().toFloat()) sp.toInt().toString() else sp.toString()) + "×"
+        val p = player ?: return
+        try {
+            val wasPlaying = p.isPlaying
+            p.playbackParams = p.playbackParams.setSpeed(sp)
+            if (!wasPlaying && p.isPlaying) p.pause()
+        } catch (_: Throwable) {}
+    }
+
+    fun playFile(f: File) {
         if (playingPath == f.absolutePath && player != null) {
             player?.let { if (it.isPlaying) it.pause() else it.start() }
             updatePlayPauseIcon(); refreshListIfVisible(); return
@@ -342,17 +565,22 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             playingPath = f.absolutePath
+            applySpeed()
             val dur = player!!.duration.coerceAtLeast(1)
-            playerSlider.valueFrom = 0f
-            playerSlider.valueTo = dur.toFloat()
-            playerSlider.value = 0f
-            tvPlayerTitle.text = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date(f.lastModified()))
+            tvPlayerTitle.text = niceName(f)
             tvPlayerTotal.text = fmt(dur.toLong())
+            tvPlayerCur.text = fmt(0)
+            waveView.peaks = FloatArray(0)
+            waveView.progress = 0f
             playerBar.visibility = View.VISIBLE
             updatePlayPauseIcon()
             refreshListIfVisible()
+            Thread {
+                val peaks = try { WavWriter.readPeaks(f, 80) } catch (_: Throwable) { FloatArray(0) }
+                ui.post { if (playingPath == f.absolutePath) waveView.peaks = peaks }
+            }.start()
         } catch (e: Throwable) {
-            Toast.makeText(this, "پخش ناموفق: ${e.message}", Toast.LENGTH_LONG).show()
+            snack("پخش ناموفق: ${e.message}")
             closePlayer()
         }
     }
@@ -365,18 +593,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun updatePlayerProgress() {
         val p = player ?: return
-        if (userSeeking) return
         try {
+            val d = p.duration.coerceAtLeast(1)
             val pos = p.currentPosition
-            val max = playerSlider.valueTo
-            playerSlider.value = pos.toFloat().coerceIn(0f, max)
+            waveView.progress = pos.toFloat() / d
             tvPlayerCur.text = fmt(pos.toLong())
         } catch (_: Throwable) {}
     }
 
     private fun closePlayer() {
         try { player?.stop() } catch (_: Throwable) {}
-        player?.release(); player = null; playingPath = null
+        try { player?.release() } catch (_: Throwable) {}
+        player = null; playingPath = null
         playerBar.visibility = View.GONE
         refreshListIfVisible()
     }
@@ -396,14 +624,14 @@ class MainActivity : AppCompatActivity() {
 
         s.findViewById<View>(R.id.rowSource).setOnClickListener {
             val names = (listOf("خودکار (پیشنهادی)") + Prefs.SOURCES.map { it.label }).toTypedArray()
-            AlertDialog.Builder(this)
+            MaterialAlertDialogBuilder(this)
                 .setTitle("منبع صدا")
                 .setSingleChoiceItems(names, prefs.sourceMode) { d, which ->
                     prefs.sourceMode = which; refreshSettingsTexts(); d.dismiss()
                 }.show()
         }
         s.findViewById<View>(R.id.rowRate).setOnClickListener {
-            AlertDialog.Builder(this)
+            MaterialAlertDialogBuilder(this)
                 .setTitle("نرخ نمونه‌برداری")
                 .setSingleChoiceItems(
                     rates.map { "$it Hz" }.toTypedArray(),
@@ -419,7 +647,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val group = s.findViewById<com.google.android.material.button.MaterialButtonToggleGroup>(R.id.toggleTheme)
+        val group = s.findViewById<MaterialButtonToggleGroup>(R.id.toggleTheme)
         group.check(
             when (prefs.themeMode) { 1 -> R.id.btnThemeLight; 2 -> R.id.btnThemeDark; else -> R.id.btnThemeSystem }
         )
@@ -432,17 +660,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        s.findViewById<View>(R.id.btnOverlay).setOnClickListener {
-            startActivity(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-            )
-        }
+        s.findViewById<View>(R.id.btnTestSources).setOnClickListener { runSourceTest() }
+        s.findViewById<View>(R.id.btnHelp).setOnClickListener { showHelpDialog() }
         s.findViewById<View>(R.id.btnBattery).setOnClickListener {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
             if (pm.isIgnoringBatteryOptimizations(packageName)) {
-                Toast.makeText(this, "قبلاً فعال شده است", Toast.LENGTH_SHORT).show()
+                snack("قبلاً فعال شده است", false)
             } else {
-                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                catch (_: Throwable) { snack("این صفحه در دستگاه شما در دسترس نیست") }
             }
         }
         s.findViewById<View>(R.id.btnEmail).setOnClickListener {
@@ -452,7 +678,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "shikmizban@gmail.com", Toast.LENGTH_LONG).show()
             }
         }
-        s.findViewById<TextView>(R.id.tvVersion).text = "Call Recorder Pro · v1.0"
+        s.findViewById<TextView>(R.id.tvVersion).text = "Call Recorder Pro · v2.0"
     }
 
     private fun refreshSettingsTexts() {
@@ -462,19 +688,48 @@ class MainActivity : AppCompatActivity() {
         tvGainValue.text = "${prefs.liveGainDb} dB"
     }
 
+    private fun runSourceTest() {
+        if (RecorderService.isRecording) { snack("اول ضبط جاری را متوقف کنید"); return }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestNeededPermissions(); return
+        }
+        val dlg = MaterialAlertDialogBuilder(this)
+            .setTitle("تست منابع صدا")
+            .setMessage("در حال تست… (حدود ۸ ثانیه)\nلطفاً کمی صحبت کنید یا صدا پخش کنید.")
+            .setCancelable(false)
+            .show()
+        Thread {
+            val res = try { SourceTester.run() } catch (_: Throwable) { emptyList() }
+            ui.post {
+                dlg.dismiss()
+                val msg = if (res.isEmpty()) "تست ممکن نشد."
+                else res.joinToString("\n") { "• ${it.name}: ${it.describe()}" } +
+                    "\n\nمنبع‌هایی که «سیگنال دارد» روی گوشی شما کار می‌کنند. اگر همه بی‌صدا بودند، تماس را روی بلندگو بگذارید و دوباره تست کنید."
+                MaterialAlertDialogBuilder(this)
+                    .setTitle("نتیجه‌ی تست")
+                    .setMessage(msg)
+                    .setPositiveButton("بستن", null)
+                    .show()
+            }
+        }.start()
+    }
+
     // ------------------------------------------------------------------ شیت بهبود کیفیت
-    private fun showEnhanceSheet(file: File) {
+    fun showEnhanceSheet(file: File) {
+        if (file.length() > 24L * 1024 * 1024) {
+            snack("این فایل برای پردازش روی گوشی خیلی بزرگ است (حداکثر حدود ۲۴ مگابایت)")
+            return
+        }
         val dlg = BottomSheetDialog(this)
         val v = LayoutInflater.from(this).inflate(R.layout.sheet_enhance, null)
         dlg.setContentView(v)
-        dlg.behavior.state = com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED
+        dlg.behavior.state = BottomSheetBehavior.STATE_EXPANDED
         dlg.behavior.skipCollapsed = true
 
         v.findViewById<TextView>(R.id.tvEnhanceFile).text = file.name
         val p = AudioProcessor.Params(0.5f, 90f, floatArrayOf(-4f, -2f, 0f, 3f, 2f), 0f, true, true)
 
         val box = v.findViewById<LinearLayout>(R.id.enhanceSliders)
-        val sliders = ArrayList<Slider>()
         fun addSlider(title: String, min: Int, max: Int, init: Int, unit: String, onChange: (Int) -> Unit): Slider {
             val row = LayoutInflater.from(this).inflate(R.layout.row_slider, box, false)
             val tvT = row.findViewById<TextView>(R.id.tvRowTitle)
@@ -483,7 +738,7 @@ class MainActivity : AppCompatActivity() {
             tvT.text = title
             sl.valueFrom = min.toFloat(); sl.valueTo = max.toFloat()
             sl.value = init.toFloat().coerceIn(min.toFloat(), max.toFloat())
-            tvV.text = "${init} $unit"
+            tvV.text = "$init $unit"
             sl.addOnChangeListener { _, value, _ ->
                 tvV.text = "${value.toInt()} $unit"; onChange(value.toInt())
             }
@@ -497,7 +752,6 @@ class MainActivity : AppCompatActivity() {
             addSlider("اکولایزر · $name", -12, 12, p.eqDb[i].toInt(), "dB") { p.eqDb[i] = it.toFloat() }
         }
         val gain = addSlider("بلند / کم کردن صدا", -12, 24, p.gainDb.toInt(), "dB") { p.gainDb = it.toFloat() }
-        sliders.addAll(listOf(noise, hp, gain) + eq)
 
         val swComp = v.findViewById<MaterialSwitch>(R.id.swCompress)
         val swNorm = v.findViewById<MaterialSwitch>(R.id.swNormalize)
@@ -505,7 +759,6 @@ class MainActivity : AppCompatActivity() {
         swComp.setOnCheckedChangeListener { _, c -> p.compress = c }
         swNorm.setOnCheckedChangeListener { _, c -> p.normalize = c }
 
-        // پریست‌ها
         val chips = v.findViewById<ChipGroup>(R.id.chipPresets)
         AudioProcessor.PRESETS.forEachIndexed { idx, preset ->
             if (idx == 0) return@forEachIndexed
@@ -542,13 +795,13 @@ class MainActivity : AppCompatActivity() {
                     WavWriter.writeAll(target, out, sr)
                     ui.post {
                         dlg.dismiss()
-                        Toast.makeText(this, "نسخه‌ی بهبودیافته ذخیره شد", Toast.LENGTH_LONG).show()
+                        snack("نسخه‌ی بهبودیافته ذخیره شد")
                         refreshList()
                     }
                 } catch (t: Throwable) {
                     ui.post {
                         dlg.dismiss()
-                        Toast.makeText(this, "خطا: ${t.message}", Toast.LENGTH_LONG).show()
+                        snack("خطا در پردازش: ${t.javaClass.simpleName} ${t.message ?: ""}")
                     }
                 }
             }.start()
@@ -567,6 +820,23 @@ class MainActivity : AppCompatActivity() {
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) need += Manifest.permission.POST_NOTIFICATIONS
         if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 1)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        val micIdx = permissions.indexOf(Manifest.permission.RECORD_AUDIO)
+        if (micIdx >= 0 && grantResults.getOrNull(micIdx) != PackageManager.PERMISSION_GRANTED) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("مجوز میکروفون لازم است")
+                .setMessage("بدون مجوز میکروفون هیچ چیزی ضبط نمی‌شود. از تنظیمات برنامه، مجوز «میکروفون» را فعال کنید.")
+                .setPositiveButton("باز کردن تنظیمات") { _, _ ->
+                    startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                    )
+                }
+                .setNegativeButton("بعداً", null)
+                .show()
+        }
     }
 
     override fun onDestroy() {

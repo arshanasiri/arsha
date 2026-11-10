@@ -28,6 +28,10 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("liveGainDb", 0)
         set(v) = sp.edit().putInt("liveGainDb", v).apply()
 
+    var firstRunDone: Boolean
+        get() = sp.getBoolean("firstRunDone", false)
+        set(v) = sp.edit().putBoolean("firstRunDone", v).apply()
+
     /** 0 = سیستم، 1 = روشن، 2 = تاریک */
     var themeMode: Int
         get() = sp.getInt("themeMode", 0)

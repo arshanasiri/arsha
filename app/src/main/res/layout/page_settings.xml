@@ -264,7 +264,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="پایداری ضبط در پس‌زمینه"
+                    android:text="عیب‌یابی و پایداری"
                     android:textColor="@color/text"
                     android:textSize="16sp"
                     android:textStyle="bold" />
@@ -274,18 +274,18 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
                     android:lineSpacingExtra="3dp"
-                    android:text="برای شروع خودکار ضبط هنگام تماس، این دو مجوز را بدهید."
+                    android:text="اگر ضبط بی‌صدا بود، تست کنید کدام منبع صدا روی گوشی شما کار می‌کند."
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
 
                 <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnOverlay"
-                    style="?attr/materialButtonOutlinedStyle"
+                    android:id="@+id/btnTestSources"
+                    style="@style/Widget.Material3.Button.TonalButton"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:text="نمایش روی سایر برنامه‌ها"
-                    app:icon="@drawable/ic_layers" />
+                    android:text="تست منابع صدا"
+                    app:icon="@drawable/ic_equalizer" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnBattery"
@@ -295,6 +295,15 @@
                     android:layout_marginTop="8dp"
                     android:text="استثنا از بهینه‌سازی باتری"
                     app:icon="@drawable/ic_battery" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnHelp"
+                    style="?attr/materialButtonOutlinedStyle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="راهنمای ضبط تماس"
+                    app:icon="@drawable/ic_help" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

@@ -1,4 +1,4 @@
-name: Build APK
+name: Build and Test
 
 on:
   push:
@@ -9,7 +9,9 @@ permissions:
 
 jobs:
   build:
+    name: Build APK and unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -21,15 +23,71 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
+      - name: Unit tests (audio processing)
+        run: gradle :app:testDebugUnitTest --no-daemon --stacktrace
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
       - name: Build release APK
         run: gradle :app:assembleRelease --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: CallRecorder-apk
-          path: app/build/outputs/apk/release/*.apk
-      - name: Publish release
+          name: apk
+          path: app/build/outputs/apk/release/app-release.apk
+
+  emulator:
+    name: Emulator tests (Android 14)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Run tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash ci/emulator_tests.sh
+      - name: Publish test evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ci/publish_evidence.sh "${{ github.run_number }}"
+
+  release:
+    name: Publish APK
+    needs: [build, emulator]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/release/app-release.apk CallRecorder.apk
-          gh release create "v1.0-${{ github.run_number }}" CallRecorder.apk --title "Call Recorder Pro build ${{ github.run_number }}" --notes "Automated APK build"
+          cp app-release.apk CallRecorder.apk
+          gh release create "v2.0-${{ github.run_number }}" CallRecorder.apk \
+            --title "Call Recorder Pro v2.0 (build ${{ github.run_number }})" \
+            --notes "APK built and tested (unit tests + Android 14 emulator tests)."

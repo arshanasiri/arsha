@@ -7,6 +7,7 @@ import java.io.RandomAccessFile
 class WavWriter(file: File, private val sampleRate: Int) {
     private val raf = RandomAccessFile(file, "rw")
     private var dataBytes = 0L
+    val bytesWritten: Long get() = dataBytes
 
     init {
         raf.setLength(0)
@@ -59,6 +60,43 @@ class WavWriter(file: File, private val sampleRate: Int) {
                 out[i] = ((bytes[44 + 2 * i].toInt() and 0xFF) or (bytes[45 + 2 * i].toInt() shl 8)).toShort()
             }
             return out to sr
+        }
+
+        /** نرخ نمونه‌برداری از هدر. */
+        fun sampleRateOf(file: File): Int = try {
+            file.inputStream().use { s ->
+                val h = ByteArray(28)
+                if (s.read(h) < 28) return 16000
+                ((h[24].toInt() and 0xFF) or ((h[25].toInt() and 0xFF) shl 8) or
+                    ((h[26].toInt() and 0xFF) shl 16) or ((h[27].toInt() and 0xFF) shl 24)).coerceAtLeast(8000)
+            }
+        } catch (_: Throwable) { 16000 }
+
+        fun durationMs(file: File): Long {
+            val data = maxOf(0L, file.length() - 44)
+            return data / 2 * 1000L / sampleRateOf(file)
+        }
+
+        /** پیک هر بازه برای رسم شکل موج (0..1). فایل را جریانی می‌خواند. */
+        fun readPeaks(file: File, bins: Int): FloatArray {
+            val out = FloatArray(bins)
+            val total = maxOf(0L, file.length() - 44) / 2
+            if (total <= 0L) return out
+            val per = maxOf(1L, total / bins)
+            java.io.BufferedInputStream(file.inputStream(), 1 shl 16).use { s ->
+                s.skip(44)
+                var idx = 0L
+                val b = ByteArray(2)
+                while (idx < total) {
+                    if (s.read(b) < 2) break
+                    val v = ((b[0].toInt() and 0xFF) or (b[1].toInt() shl 8)).toShort().toInt()
+                    val bin = minOf(bins - 1, (idx / per).toInt())
+                    val a = kotlin.math.abs(v) / 32768f
+                    if (a > out[bin]) out[bin] = a
+                    idx++
+                }
+            }
+            return out
         }
 
         fun writeAll(file: File, samples: ShortArray, sr: Int) {

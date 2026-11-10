@@ -73,7 +73,7 @@
             android:id="@+id/swNormalize"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="نرمال‌سازی (رساندن اوج صدا به -1dB)"
+            android:text="نرمال‌سازی (بلندتر کردن تا حد مجاز بدون اعوجاج)"
             android:textColor="@color/text"
             android:textSize="13.5sp" />
 

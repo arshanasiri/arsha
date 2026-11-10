@@ -70,9 +70,9 @@ if grep -q "FATAL EXCEPTION" "$OUT/logcat-call.txt"; then
 else
   pass "no fatal exception during call scenario"
 fi
-if grep -q "CallRecorder: event ok=" "$OUT/logcat-call.txt"; then
-  grep "CallRecorder: event" "$OUT/logcat-call.txt" | tail -3 | tee -a "$OUT/summary.txt"
-  if grep "CallRecorder: event" "$OUT/logcat-call.txt" | grep -q "ذخیره شد"; then
+if grep -aq "CallRecorder.*event ok=" "$OUT/logcat-call.txt"; then
+  grep -a "CallRecorder.*event ok=" "$OUT/logcat-call.txt" | tail -3 | cut -c1-300 | tee -a "$OUT/summary.txt"
+  if grep -a "CallRecorder.*event ok=" "$OUT/logcat-call.txt" | grep -aq "ذخیره شد"; then
     pass "call auto-started and saved a recording"
   else
     fail "call finished but no recording was saved"

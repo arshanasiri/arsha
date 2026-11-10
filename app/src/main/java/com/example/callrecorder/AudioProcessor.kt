@@ -25,7 +25,7 @@ object AudioProcessor {
     )
 
     val EQ_FREQS = floatArrayOf(100f, 300f, 1000f, 3000f, 6000f)
-    val EQ_LABELS = listOf("100 Hz (بم)", "300 Hz", "1 kHz", "3 kHz (وضوح گفتار)", "6 kHz (زیر)")
+    val EQ_LABELS = listOf("\u2066100 Hz\u2069 (بم)", "\u2066300 Hz\u2069", "\u20661 kHz\u2069", "\u20663 kHz\u2069 (وضوح گفتار)", "\u20666 kHz\u2069 (زیر)")
 
     class Preset(val name: String, val p: Params)
 

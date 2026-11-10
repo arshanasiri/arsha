@@ -145,7 +145,7 @@ class AudioProcessorTest {
     @Test
     fun wavRoundTripKeepsSamplesAndHeader() {
         val inp = toShort(tone(sr, 440.0, 0.3))
-        val f = File.createTempFile("rt", ".wav")
+        val f = File.createTempFile("roundtrip", ".wav")
         try {
             WavWriter.writeAll(f, inp, sr)
             val (back, rate) = WavWriter.read(f)

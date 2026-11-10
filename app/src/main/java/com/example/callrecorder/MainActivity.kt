@@ -370,8 +370,7 @@ class MainActivity : AppCompatActivity() {
             val enhanced = f.name.endsWith("_enhanced.wav")
             row.findViewById<TextView>(R.id.tvName).text = niceName(f)
             row.findViewById<TextView>(R.id.tvMeta).text =
-                "${fmt(dur)} · ${"%.1f".format(f.length() / 1048576.0)} MB · " +
-                    SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(Date(f.lastModified()))
+                "\u2066${fmt(dur)} · ${"%.1f".format(f.length() / 1048576.0)} MB\u2069"
             row.findViewById<View>(R.id.tvTag).visibility = if (enhanced) View.VISIBLE else View.GONE
 
             val playing = playingPath == f.absolutePath && player?.isPlaying == true
@@ -390,10 +389,12 @@ class MainActivity : AppCompatActivity() {
         statSize.text = "%.1f MB".format(totalBytes / 1048576.0)
     }
 
+    /** عنوان خوانا؛ تاریخ و ساعت داخل یک بلوک چپ‌به‌راست تا ترتیب ارقام به‌هم نریزد. */
     private fun niceName(f: File): String {
-        val n = f.nameWithoutExtension
-        return if (n.startsWith("call_")) "مکالمه ${n.removePrefix("call_").removeSuffix("_enhanced").replace('_', ' ')}"
-        else n
+        val m = Regex("""call_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})""").find(f.nameWithoutExtension)
+            ?: return f.nameWithoutExtension
+        val (y, mo, d, h, mi, _) = m.destructured
+        return "مکالمه \u2066$y/$mo/$d  $h:$mi\u2069"
     }
 
     private fun showMore(anchor: View, f: File) {

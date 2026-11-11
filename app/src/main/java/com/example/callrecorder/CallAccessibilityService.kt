@@ -16,11 +16,18 @@ class CallAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     companion object {
-        fun isEnabled(ctx: Context): Boolean = try {
-            val v = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-                ?: return false
-            val id = ComponentName(ctx, CallAccessibilityService::class.java).flattenToString()
-            v.split(':').any { it.equals(id, true) || it.endsWith("CallAccessibilityService") }
-        } catch (_: Throwable) { false }
+        fun isEnabled(ctx: Context): Boolean {
+            return try {
+                val v = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                if (v.isNullOrEmpty()) {
+                    false
+                } else {
+                    val id = ComponentName(ctx, CallAccessibilityService::class.java).flattenToString()
+                    v.split(':').any { it.equals(id, true) || it.endsWith("CallAccessibilityService") }
+                }
+            } catch (_: Throwable) {
+                false
+            }
+        }
     }
 }

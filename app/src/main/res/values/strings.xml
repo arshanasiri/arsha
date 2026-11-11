@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_description">این سرویس هیچ اطلاعاتی از صفحه نمی‌خواند و جمع نمی‌کند. فقط فعال بودنش به اندروید اجازه می‌دهد میکروفون را هنگام تماس برای ضبط در اختیار Call Recorder Pro بگذارد (روی بعضی گوشی‌ها).</string>
+</resources>

@@ -113,6 +113,7 @@ class MainActivity : AppCompatActivity() {
         // میان‌بُرها (برای تست خودکار و شورت‌کات): arm = فعال‌سازی آماده‌باش، skipIntro = بدون راهنمای اول
         if (intent.getBooleanExtra("skipIntro", false)) prefs.firstRunDone = true
         if (intent.getBooleanExtra("arm", false)) prefs.autoRecord = true
+        if (intent.getBooleanExtra("fake", false)) prefs.fakeSource = true
 
         bottomNav = findViewById(R.id.bottomNav)
         pageRecord = findViewById(R.id.pageRecord)
@@ -662,6 +663,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         s.findViewById<View>(R.id.btnTestSources).setOnClickListener { runSourceTest() }
+        s.findViewById<View>(R.id.btnA11y).setOnClickListener { showA11yGuide() }
+        s.findViewById<View>(R.id.btnReport).setOnClickListener { shareReport() }
+        updateA11yStatus()
         s.findViewById<View>(R.id.btnHelp).setOnClickListener { showHelpDialog() }
         s.findViewById<View>(R.id.btnBattery).setOnClickListener {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
@@ -679,7 +683,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "shikmizban@gmail.com", Toast.LENGTH_LONG).show()
             }
         }
-        s.findViewById<TextView>(R.id.tvVersion).text = "Call Recorder Pro · v2.0"
+        s.findViewById<TextView>(R.id.tvVersion).text = "Call Recorder Pro · v2.1"
     }
 
     private fun refreshSettingsTexts() {
@@ -687,6 +691,89 @@ class MainActivity : AppCompatActivity() {
         else Prefs.SOURCES[prefs.sourceMode - 1].short
         tvRateValue.text = "${prefs.sampleRate} Hz"
         tvGainValue.text = "${prefs.liveGainDb} dB"
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::pageSettings.isInitialized) updateA11yStatus()
+    }
+
+    private fun updateA11yStatus() {
+        val on = CallAccessibilityService.isEnabled(this)
+        pageSettings.findViewById<TextView>(R.id.tvA11yStatus).text =
+            if (on) "وضعیت: فعال ✓" else "وضعیت: غیرفعال"
+        pageSettings.findViewById<MaterialButton>(R.id.btnA11y).text =
+            if (on) "تنظیمات سرویس دسترسی" else "فعال‌سازی سرویس دسترسی"
+    }
+
+    private fun showA11yGuide() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("فعال‌سازی سرویس دسترسی")
+            .setMessage(
+                "۱. «رفتن به تنظیمات» را بزنید و در لیست، «Call Recorder Pro» را پیدا و روشن کنید.\n\n" +
+                "۲. اگر گزینه خاکستری بود (اندروید ۱۳ به بالا): تنظیمات گوشی ← برنامه‌ها ← Call Recorder Pro ← " +
+                "منوی سه‌نقطه‌ی بالا ← «Allow restricted settings»، سپس دوباره مرحله‌ی ۱.\n\n" +
+                "۳. برگردید و یک تماس را روی بلندگو ضبط کنید.\n\n" +
+                "این سرویس هیچ متن یا اطلاعاتی از صفحه نمی‌خواند. روی بعضی گوشی‌ها کمک می‌کند و روی بعضی تغییری ندارد."
+            )
+            .setPositiveButton("رفتن به تنظیمات") { _, _ ->
+                try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                catch (_: Throwable) { snack("این صفحه در دستگاه شما در دسترس نیست") }
+            }
+            .setNeutralButton("اطلاعات برنامه") { _, _ ->
+                startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                )
+            }
+            .setNegativeButton("بستن", null)
+            .show()
+    }
+
+    private fun audioModeName(): String {
+        val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+        return when (am.mode) {
+            android.media.AudioManager.MODE_IN_CALL -> "در تماس (IN_CALL)"
+            android.media.AudioManager.MODE_IN_COMMUNICATION -> "ارتباط صوتی (IN_COMMUNICATION)"
+            android.media.AudioManager.MODE_RINGTONE -> "زنگ (RINGTONE)"
+            else -> "عادی (NORMAL)"
+        }
+    }
+
+    private fun buildReport(): String {
+        fun perm(p: String) = if (checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED) "yes" else "NO"
+        return buildString {
+            appendLine("Call Recorder Pro v2.1 - diagnostic report")
+            appendLine("device: ${Build.MANUFACTURER} ${Build.MODEL} | Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            appendLine("audio mode now: ${audioModeName()}")
+            appendLine("accessibility service enabled: ${CallAccessibilityService.isEnabled(this@MainActivity)}")
+            appendLine("permissions: mic=${perm(Manifest.permission.RECORD_AUDIO)} phone=${perm(Manifest.permission.READ_PHONE_STATE)}")
+            appendLine("settings: source=${prefs.sourceMode} rate=${prefs.sampleRate} liveGain=${prefs.liveGainDb} speaker=${prefs.forceSpeaker} armed=${RecorderService.isArmed}")
+            appendLine()
+            appendLine("last recording log:")
+            appendLine(RecorderService.log.ifBlank { "(none)" })
+            appendLine("last event: ok=${RecorderService.eventOk} ${RecorderService.eventMsg.replace('\n', ' ')}")
+            appendLine()
+            appendLine("last source test:")
+            appendLine(RecorderService.lastTest.ifBlank { "(not run)" })
+        }
+    }
+
+    private fun shareReport() {
+        try {
+            startActivity(
+                Intent.createChooser(
+                    Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_EMAIL, arrayOf("shikmizban@gmail.com"))
+                        .putExtra(Intent.EXTRA_SUBJECT, "Call Recorder Pro - گزارش عیب‌یابی")
+                        .putExtra(Intent.EXTRA_TEXT, buildReport()),
+                    "ارسال گزارش"
+                )
+            )
+        } catch (t: Throwable) {
+            val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("report", buildReport()))
+            snack("گزارش کپی شد")
+        }
     }
 
     private fun runSourceTest() {
@@ -703,9 +790,14 @@ class MainActivity : AppCompatActivity() {
             val res = try { SourceTester.run() } catch (_: Throwable) { emptyList() }
             ui.post {
                 dlg.dismiss()
-                val msg = if (res.isEmpty()) "تست ممکن نشد."
-                else res.joinToString("\n") { "• ${it.name}: ${it.describe()}" } +
-                    "\n\nمنبع‌هایی که «سیگنال دارد» روی گوشی شما کار می‌کنند. اگر همه بی‌صدا بودند، تماس را روی بلندگو بگذارید و دوباره تست کنید."
+                val mode = audioModeName()
+                val body = if (res.isEmpty()) "تست ممکن نشد."
+                else res.joinToString("\n") { "• ${it.name}: ${it.describe()}" }
+                RecorderService.lastTest = "audio mode: $mode\n" + body
+                val inCallNow = mode.contains("IN_CALL") || mode.contains("IN_COMMUNICATION")
+                val msg = "حالت صدای سیستم: $mode\n\n" + body + "\n\n" +
+                    if (inCallNow) "این تست در حین تماس گرفته شد؛ منبع‌هایی که «سیگنال دارد» برای ضبط تماس قابل استفاده‌اند."
+                    else "توجه: این تست خارج از تماس گرفته شد. ضبط در حین تماس ممکن است متفاوت باشد؛ اندروید در تماس معمولاً میکروفون را مسدود می‌کند."
                 MaterialAlertDialogBuilder(this)
                     .setTitle("نتیجه‌ی تست")
                     .setMessage(msg)

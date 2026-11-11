@@ -88,6 +88,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app-release.apk CallRecorder.apk
-          gh release create "v2.0-${{ github.run_number }}" CallRecorder.apk \
-            --title "Call Recorder Pro v2.0 (build ${{ github.run_number }})" \
+          gh release create "v2.1-${{ github.run_number }}" CallRecorder.apk \
+            --title "Call Recorder Pro v2.1 (build ${{ github.run_number }})" \
             --notes "APK built and tested (unit tests + Android 14 emulator tests)."

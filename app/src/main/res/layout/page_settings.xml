@@ -244,6 +244,64 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- ضبط تماس -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            app:cardBackgroundColor="@color/card"
+            app:cardCornerRadius="24dp"
+            app:cardElevation="0dp"
+            app:strokeColor="@color/outline"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ضبط صدای تماس در اندروید جدید"
+                    android:textColor="@color/text"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:lineSpacingExtra="3dp"
+                    android:text="اندروید ۱۰ به بالا هنگام تماس میکروفون را از برنامه‌های عادی می‌گیرد و ضبط بی‌صدا می‌شود. روی بعضی گوشی‌ها فعال بودن «سرویس دسترسی» این برنامه جلوی این مشکل را می‌گیرد (تضمینی نیست). این سرویس هیچ اطلاعاتی نمی‌خواند."
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/tvA11yStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/bg_chip"
+                    android:paddingStart="14dp"
+                    android:paddingTop="6dp"
+                    android:paddingEnd="14dp"
+                    android:paddingBottom="6dp"
+                    android:textColor="@color/on_primary_container"
+                    android:textSize="12sp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnA11y"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="فعال‌سازی سرویس دسترسی"
+                    app:icon="@drawable/ic_bolt" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
         <!-- مجوزها -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
@@ -304,6 +362,15 @@
                     android:layout_marginTop="8dp"
                     android:text="راهنمای ضبط تماس"
                     app:icon="@drawable/ic_help" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnReport"
+                    style="?attr/materialButtonOutlinedStyle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="ارسال گزارش عیب‌یابی"
+                    app:icon="@drawable/ic_share" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

@@ -33,8 +33,10 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.pow
+import kotlin.math.sin
 
 /**
  * سرویس ضبط (Foreground، نوع microphone).
@@ -62,6 +64,8 @@ class RecorderService : Service() {
         @Volatile var isRecording = false
         @Volatile var isArmed = false
         @Volatile var startedAuto = false
+        @Volatile var inCall = false
+        @Volatile var lastTest = ""
         @Volatile var startTime = 0L
         @Volatile var activeSource = "-"
         @Volatile var level = 0
@@ -179,7 +183,10 @@ class RecorderService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
         if (isRecording) {
             b.setContentTitle("در حال ضبط…")
-                .setContentText("برای توقف از دکمه‌ی زیر استفاده کنید")
+                .setContentText(
+                    if (inCall) "برای ضبط صدای طرف مقابل، بلندگوی تماس را روشن کنید"
+                    else "برای توقف از دکمه‌ی زیر استفاده کنید"
+                )
                 .addAction(0, "توقف ضبط", pi(ACTION_STOP))
         } else {
             b.setContentTitle("آماده‌باش ضبط خودکار")
@@ -293,12 +300,16 @@ class RecorderService : Service() {
         stopSelf()
     }
 
+    private fun addLog(line: String) {
+        if (log.length < 1800) log += line + "\n"
+    }
+
     private fun buildChain(mode: Int, inCall: Boolean): List<Prefs.Companion.Source> {
         val all = Prefs.SOURCES
         val byId = all.associateBy { it.id }
         val auto = if (inCall) listOf(
-            MediaRecorder.AudioSource.VOICE_CALL, MediaRecorder.AudioSource.MIC,
-            MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.VOICE_CALL, MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.MIC,
             MediaRecorder.AudioSource.UNPROCESSED, MediaRecorder.AudioSource.CAMCORDER
         ) else listOf(
             MediaRecorder.AudioSource.MIC, MediaRecorder.AudioSource.VOICE_RECOGNITION,
@@ -313,7 +324,23 @@ class RecorderService : Service() {
         return ordered
     }
 
-    private fun openSource(src: Int, sr: Int, bufBytes: Int): AudioRecord? {
+    /** منبع PCM: یا AudioRecord واقعی، یا صدای مصنوعی (فقط برای تست خودکار). */
+    private class Src(val rec: AudioRecord?, val sr: Int) {
+        private var t = 0L
+        fun read(buf: ShortArray): Int {
+            val r = rec
+            if (r != null) return r.read(buf, 0, buf.size)
+            try { Thread.sleep(buf.size * 1000L / sr) } catch (_: InterruptedException) {}
+            for (i in buf.indices) {
+                val x = t++
+                buf[i] = (9000 * sin(2 * PI * 440 * x / sr) + (Math.random() - 0.5) * 600).toInt().toShort()
+            }
+            return buf.size
+        }
+    }
+
+    private fun openSource(src: Int, sr: Int, bufBytes: Int): Src? {
+        if (Prefs(this).fakeSource) return Src(null, sr)
         var ar: AudioRecord? = null
         return try {
             ar = AudioRecord(src, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufBytes)
@@ -333,14 +360,15 @@ class RecorderService : Service() {
             if (ar.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                 ar.release(); return null
             }
-            ar
+            Src(ar, sr)
         } catch (_: Throwable) {
             try { ar?.release() } catch (_: Throwable) {}
             null
         }
     }
 
-    private fun closeSource(rec: AudioRecord?) {
+    private fun closeSource(src: Src?) {
+        val rec = src?.rec
         try { rec?.stop() } catch (_: Throwable) {}
         try { rec?.release() } catch (_: Throwable) {}
         for (e in effects) try { e.release() } catch (_: Throwable) {}
@@ -349,18 +377,18 @@ class RecorderService : Service() {
 
     /**
      * از یک منبع می‌خواند و می‌نویسد.
-     * اگر writeAlways=false و تا probeMs سیگنال نیامد (یا خطا شد) دلیل تعویض را برمی‌گرداند.
+     * تا وقتی سیگنال نیامده چیزی نوشته نمی‌شود؛ اگر تا probeMs سیگنال نیامد (یا خطا شد) دلیل تعویض را برمی‌گرداند.
      * اگر کاربر توقف کند null برمی‌گرداند.
      */
     private fun capture(
-        rec: AudioRecord, writer: WavWriter, chunk: ShortArray, gain: Float,
-        label: String, writeAlways: Boolean, probeMs: Long
+        src: Src, writer: WavWriter, chunk: ShortArray, gain: Float,
+        label: String, probeMs: Long
     ): String? {
         val probe = ArrayList<ShortArray>()
-        var saw = writeAlways
+        var saw = false
         val t0 = SystemClock.elapsedRealtime()
         while (running) {
-            val n = rec.read(chunk, 0, chunk.size)
+            val n = src.read(chunk)
             if (n < 0) return "خطای خواندن ($n)"
             if (n == 0) continue
             var peak = 0
@@ -374,13 +402,12 @@ class RecorderService : Service() {
             level = minOf(100, peak * 100 / 32768)
             if (saw) {
                 writer.write(chunk, n)
-                if (peak >= 2) sawAnySignal = true
                 continue
             }
             if (peak >= 2) {
                 saw = true
                 sawAnySignal = true
-                log += "✓ $label: سیگنال دریافت شد\n"
+                addLog("✓ $label: سیگنال دریافت شد")
                 for (p in probe) writer.write(p, p.size)
                 probe.clear()
                 writer.write(chunk, n)
@@ -409,9 +436,10 @@ class RecorderService : Service() {
 
     private fun recordLoop() {
         var writer: WavWriter? = null
-        var record: AudioRecord? = null
+        var current: Src? = null
         var file: File? = null
         var sr = 16000
+        var inCallAtStart = false
         try {
             val prefs = Prefs(this)
             sr = prefs.sampleRate
@@ -419,7 +447,7 @@ class RecorderService : Service() {
                 sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
             )
             if (minBuf <= 0) {
-                log += "نرخ نمونه‌برداری $sr روی این دستگاه پشتیبانی نمی‌شود\n"
+                addLog("نرخ نمونه‌برداری $sr روی این دستگاه پشتیبانی نمی‌شود")
                 return
             }
             val bufBytes = maxOf(minBuf * 2, sr)
@@ -435,48 +463,45 @@ class RecorderService : Service() {
                 .apply { acquire(4 * 60 * 60 * 1000L) }
 
             val am = getSystemService(AUDIO_SERVICE) as AudioManager
-            val inCall = am.mode == AudioManager.MODE_IN_CALL || am.mode == AudioManager.MODE_IN_COMMUNICATION
+            inCallAtStart = am.mode == AudioManager.MODE_IN_CALL || am.mode == AudioManager.MODE_IN_COMMUNICATION
+            inCall = inCallAtStart
+            addLog("حالت صدا: " + (if (inCallAtStart) "در تماس" else "عادی") +
+                " · سرویس دسترسی: " + (if (CallAccessibilityService.isEnabled(this)) "فعال" else "غیرفعال"))
+            if (inCallAtStart) refreshNotification()
             if (prefs.forceSpeaker) forceSpeakerIfInCall(am)
 
             writer = WavWriter(file, sr)
-            val chain = buildChain(prefs.sourceMode, inCall)
-            var firstOpened: Prefs.Companion.Source? = null
+            val chain = buildChain(prefs.sourceMode, inCallAtStart)
 
-            for (s in chain) {
+            // تا وقتی کاربر توقف نکرده منابع را دوباره و دوباره امتحان می‌کنیم؛
+            // ممکن است سیستم بعداً (مثلاً بعد از روشن شدن بلندگو) صدا را آزاد کند.
+            var round = 0
+            while (running) {
+                for (s in chain) {
+                    if (!running) break
+                    val src = openSource(s.id, sr, bufBytes)
+                    if (src == null) {
+                        if (round == 0) addLog("✗ ${s.short}: باز نشد")
+                        continue
+                    }
+                    current = src
+                    activeSource = s.label
+                    val heardBefore = sawAnySignal
+                    val reason = capture(src, writer, chunk, gain, s.short, 1500)
+                    closeSource(src)
+                    current = null
+                    if (reason == null) break
+                    if (round == 0 || heardBefore != sawAnySignal) addLog("✗ ${s.short}: $reason")
+                }
                 if (!running) break
-                val rec = openSource(s.id, sr, bufBytes)
-                if (rec == null) {
-                    log += "✗ ${s.short}: باز نشد\n"
-                    continue
-                }
-                if (firstOpened == null) firstOpened = s
-                record = rec
-                activeSource = s.label
-                val reason = capture(rec, writer, chunk, gain, s.short, false, 1500)
-                closeSource(rec)
-                record = null
-                if (reason == null) break
-                log += "✗ ${s.short}: $reason\n"
-            }
-
-            // هیچ منبعی سیگنال نداد ولی کاربر هنوز توقف نکرده: روی اولین منبع بازشده ادامه بده
-            if (running && firstOpened != null) {
-                val rec = openSource(firstOpened.id, sr, bufBytes)
-                if (rec != null) {
-                    record = rec
-                    activeSource = firstOpened.label
-                    log += "⚠ ضبط روی ${firstOpened.short} ادامه دارد (ممکن است بی‌صدا باشد)\n"
-                    capture(rec, writer, chunk, gain, firstOpened.short, true, 0)
-                    closeSource(rec)
-                    record = null
-                }
-            } else if (firstOpened == null && running) {
-                log += "هیچ منبع صدایی باز نشد؛ میکروفون ممکن است در اختیار برنامه‌ی دیگری باشد.\n"
+                round++
+                if (round == 1 && !sawAnySignal) addLog("… سیستم صدا نمی‌دهد؛ مدام دوباره امتحان می‌کنم")
+                try { Thread.sleep(400) } catch (_: InterruptedException) {}
             }
         } catch (t: Throwable) {
-            log += "خطا: ${t.javaClass.simpleName} ${t.message ?: ""}\n"
+            addLog("خطا: ${t.javaClass.simpleName} ${t.message ?: ""}")
         } finally {
-            closeSource(record)
+            closeSource(current)
             try { writer?.close() } catch (_: Throwable) {}
             if (speakerChanged) {
                 try {
@@ -488,18 +513,22 @@ class RecorderService : Service() {
             }
             try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Throwable) {}
 
-            // نتیجه
+            // نتیجه: فایل بی‌صدا هرگز نگه داشته نمی‌شود؛ به‌جایش دلیل و راه‌حل گفته می‌شود
             val f = file
             val dataBytes = if (f != null && f.exists()) maxOf(0L, f.length() - 44) else 0L
             val seconds = dataBytes / (sr * 2L)
-            if (f != null && dataBytes < sr * 2L / 3) {          // کمتر از ~۰٫۳ ثانیه
+            if (f != null && (!sawAnySignal || dataBytes < sr * 2L / 3)) {
                 try { f.delete() } catch (_: Throwable) {}
-                postEvent(false, "صدایی ضبط نشد.\n" + log.trim().ifBlank { "دلیل نامشخص" })
-            } else if (!sawAnySignal) {
-                postEvent(false, "ضبط ذخیره شد ولی بی‌صدا است؛ سیستم اجازه‌ی دریافت صدا را نداد. تماس را روی بلندگو بگذارید.")
+                val hint = if (inCallAtStart)
+                    "در تماس، اندروید معمولاً میکروفون را از برنامه‌های عادی می‌گیرد. تماس را روی بلندگو بگذارید، " +
+                        "در تنظیمات «سرویس دسترسی» را فعال کنید و دوباره امتحان کنید. اگر باز هم نشد، از تنظیمات «ارسال گزارش» را بزنید."
+                else
+                    "صدایی از میکروفون نیامد. مجوز میکروفون را بررسی کنید و در تنظیمات «تست منابع صدا» را بزنید."
+                postEvent(false, "صدایی ضبط نشد.\n$hint")
             } else {
                 postEvent(true, "ضبط ذخیره شد (${seconds} ثانیه)")
             }
+            inCall = false
             main.post { afterRecording() }
         }
     }

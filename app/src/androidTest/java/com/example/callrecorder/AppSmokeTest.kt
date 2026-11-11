@@ -81,7 +81,7 @@ class AppSmokeTest {
 
     @Before
     fun setUp() {
-        Prefs(ctx).apply { firstRunDone = true; autoRecord = false; sourceMode = 0; sampleRate = 16000; themeMode = 0 }
+        Prefs(ctx).apply { firstRunDone = true; autoRecord = false; sourceMode = 0; sampleRate = 16000; themeMode = 0; fakeSource = false }
         RecorderService.recordingsDir(ctx).listFiles()?.forEach { it.delete() }
         CrashLogger.clear(ctx)
     }
@@ -90,6 +90,7 @@ class AppSmokeTest {
     fun tearDown() {
         RecorderService.send(ctx, RecorderService.ACTION_STOP)
         RecorderService.send(ctx, RecorderService.ACTION_DISARM)
+        Prefs(ctx).fakeSource = false
         shell("cmd uimode night auto")
     }
 
@@ -148,8 +149,10 @@ class AppSmokeTest {
         tour("dark")
     }
 
+    /** مسیر موفق: با منبع آزمایشی (صدای مصنوعی) باید فایل WAV شنیدنی ساخته شود. */
     @Test
-    fun recordingProducesWavFile() {
+    fun recordingWithSignalProducesAudibleWav() {
+        Prefs(ctx).fakeSource = true
         ActivityScenario.launch(MainActivity::class.java).use { sc ->
             Thread.sleep(700)
             assertTrue(RecorderService.send(ctx, RecorderService.ACTION_START))
@@ -159,23 +162,51 @@ class AppSmokeTest {
             )
             Thread.sleep(4_000)
             shot("recording_state")
-            // زنجیره‌ی کامل منابع (تا ~۹ ثانیه) + کمی ضبط روی منبع نهایی
-            Thread.sleep(11_000)
-            assertTrue(RecorderService.isRecording)
+            Thread.sleep(2_000)
             assertTrue(RecorderService.send(ctx, RecorderService.ACTION_STOP))
             assertTrue("recording never stopped", waitFor(10_000) { !RecorderService.isRecording })
             waitFor(5_000) { RecorderService.eventSeq > 0 }
             Log.i("CITEST", "log=${RecorderService.log} | event=${RecorderService.eventMsg} ok=${RecorderService.eventOk}")
 
+            assertTrue("event should be ok: ${RecorderService.eventMsg}", RecorderService.eventOk)
+            assertTrue(RecorderService.log.contains("✓"))
             val files = recordings()
-            assertEquals("expected exactly one recording; log=${RecorderService.log}", 1, files.size)
-            val dataBytes = files[0].length() - 44
-            assertTrue("recording too short: $dataBytes bytes; log=${RecorderService.log}", dataBytes > 16000 * 2 * 2)
-            assertTrue(WavWriter.durationMs(files[0]) > 2000)
-            assertTrue(RecorderService.eventMsg.isNotBlank())
+            assertEquals("expected exactly one recording", 1, files.size)
+            assertTrue("recording too short", WavWriter.durationMs(files[0]) in 4_500L..8_500L)
+
+            // محتوای فایل واقعاً صدا دارد (نه سکوت)
+            val (samples, _) = WavWriter.read(files[0])
+            var peak = 0
+            for (x in samples) peak = maxOf(peak, kotlin.math.abs(x.toInt()))
+            assertTrue("file is silent, peak=$peak", peak > 4000)
 
             selectTab(sc, R.id.nav_library)
             shot("library_after_recording")
+        }
+    }
+
+    /** مسیر شکست: میکروفون شبیه‌ساز بی‌صدا است؛ نباید فایل خالی بماند و باید پیام روشن بیاید. */
+    @Test
+    fun silentMicGivesClearErrorAndNoEmptyFile() {
+        ActivityScenario.launch(MainActivity::class.java).use {
+            Thread.sleep(500)
+            val seqBefore = RecorderService.eventSeq
+            assertTrue(RecorderService.send(ctx, RecorderService.ACTION_START))
+            assertTrue(waitFor(10_000) { RecorderService.isRecording })
+            Thread.sleep(5_000)
+            RecorderService.send(ctx, RecorderService.ACTION_STOP)
+            assertTrue(waitFor(10_000) { !RecorderService.isRecording })
+            assertTrue(waitFor(5_000) { RecorderService.eventSeq > seqBefore })
+            Log.i("CITEST", "silent-mic: log=${RecorderService.log} | event=${RecorderService.eventMsg} ok=${RecorderService.eventOk}")
+            assertTrue(RecorderService.eventMsg.isNotBlank())
+            val files = recordings()
+            if (RecorderService.eventOk) {
+                // اگر این شبیه‌ساز میکروفون واقعی داشت، فایل باید صدا داشته باشد
+                assertEquals(1, files.size)
+            } else {
+                assertEquals("no empty file may remain after failure", 0, files.size)
+                assertTrue(RecorderService.eventMsg.contains("صدایی ضبط نشد"))
+            }
         }
     }
 
@@ -197,6 +228,11 @@ class AppSmokeTest {
             RecorderService.send(ctx, RecorderService.ACTION_DISARM)
             assertTrue("service should stop", waitFor(10_000) { !RecorderService.serviceAlive })
         }
+    }
+
+    @Test
+    fun accessibilityServiceIsOffByDefault() {
+        assertFalse(CallAccessibilityService.isEnabled(ctx))
     }
 
     @Test

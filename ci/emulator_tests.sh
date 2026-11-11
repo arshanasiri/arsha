@@ -36,7 +36,7 @@ for p in RECORD_AUDIO READ_PHONE_STATE POST_NOTIFICATIONS; do
 done
 adb shell cmd uimode night no > /dev/null 2>&1
 
-adb shell am start -n "$PKG/.MainActivity" --ez arm true --ez skipIntro true > /dev/null
+adb shell am start -n "$PKG/.MainActivity" --ez arm true --ez skipIntro true --ez fake true > /dev/null
 sleep 6
 adb exec-out screencap -p > "$OUT/shots/call_1_armed.png"
 if adb shell dumpsys activity services "$PKG" | grep -q "RecorderService"; then
@@ -72,7 +72,7 @@ else
 fi
 if grep -aq "CallRecorder.*event ok=" "$OUT/logcat-call.txt"; then
   grep -a "CallRecorder.*event ok=" "$OUT/logcat-call.txt" | tail -3 | cut -c1-300 | tee -a "$OUT/summary.txt"
-  if grep -a "CallRecorder.*event ok=" "$OUT/logcat-call.txt" | grep -aq "ذخیره شد"; then
+  if grep -a "CallRecorder.*event ok=true" "$OUT/logcat-call.txt" | grep -aq "ذخیره شد"; then
     pass "call auto-started and saved a recording"
   else
     fail "call finished but no recording was saved"

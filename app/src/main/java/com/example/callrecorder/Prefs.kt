@@ -28,6 +28,11 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("liveGainDb", 0)
         set(v) = sp.edit().putInt("liveGainDb", v).apply()
 
+    /** فقط برای تست خودکار: به‌جای میکروفون، صدای مصنوعی می‌خواند. */
+    var fakeSource: Boolean
+        get() = sp.getBoolean("fakeSource", false)
+        set(v) = sp.edit().putBoolean("fakeSource", v).apply()
+
     var firstRunDone: Boolean
         get() = sp.getBoolean("firstRunDone", false)
         set(v) = sp.edit().putBoolean("firstRunDone", v).apply()

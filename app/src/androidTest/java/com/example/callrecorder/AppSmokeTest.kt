@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.View
 import android.widget.ScrollView
+import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -33,6 +34,7 @@ class AppSmokeTest {
     private val grants = buildList {
         add(Manifest.permission.RECORD_AUDIO)
         add(Manifest.permission.READ_PHONE_STATE)
+        add(Manifest.permission.READ_CALL_LOG)
         if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
     }
 
@@ -241,6 +243,78 @@ class AppSmokeTest {
         assertTrue(RecorderService.send(ctx, RecorderService.ACTION_DISARM))
         Thread.sleep(500)
         assertFalse(RecorderService.serviceAlive)
+    }
+
+    private fun isNight(sc: ActivityScenario<MainActivity>): Boolean {
+        var n = false
+        sc.onActivity {
+            n = (it.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
+        return n
+    }
+
+    @Test
+    fun themeToggleButtonSwitchesBothWays() {
+        shell("cmd uimode night no")
+        Thread.sleep(500)
+        ActivityScenario.launch(MainActivity::class.java).use { sc ->
+            Thread.sleep(800)
+            assertFalse("should start light", isNight(sc))
+            selectTab(sc, R.id.nav_library)
+            sc.onActivity { it.findViewById<View>(R.id.btnTheme).performClick() }
+            assertTrue("dark after 1st click", waitFor(6000) { isNight(sc) })
+            Thread.sleep(600)
+            assertTrue("tab kept after theme change", visible(sc, R.id.pageLibrary))
+            shot("theme_toggled_dark")
+            sc.onActivity { it.findViewById<View>(R.id.btnTheme).performClick() }
+            assertTrue("light after 2nd click", waitFor(6000) { !isNight(sc) })
+            shot("theme_toggled_light")
+        }
+    }
+
+    private fun writeMeta(f: File, number: String, name: String, dir: Int) =
+        CallMeta.write(f, CallMeta.Info(number, name, dir, true))
+
+    @Test
+    fun libraryGroupsByContactAndBulkDeleteRemovesFiles() {
+        val a1 = makeSample("call_20261109_101500.wav", 5);  writeMeta(a1, "+989121234567", "علی رضایی", 1)
+        val a2 = makeSample("call_20261109_111500.wav", 50); writeMeta(a2, "09121234567", "", 2)
+        val b1 = makeSample("call_20261108_184200.wav", 900, 9); writeMeta(b1, "02188776655", "", 1)
+        val c1 = makeSample("call_20261107_090000.wav", 2000);   writeMeta(c1, "", "", 0)
+        assertEquals(4, recordings().size)
+        ActivityScenario.launch(MainActivity::class.java).use { sc ->
+            Thread.sleep(800)
+            selectTab(sc, R.id.nav_library)
+            var titles = emptyList<String>()
+            sc.onActivity {
+                val box = it.findViewById<android.widget.LinearLayout>(R.id.listBox)
+                titles = (0 until box.childCount).mapNotNull { i ->
+                    box.getChildAt(i).findViewById<TextView>(R.id.gTitle)?.text?.toString()
+                }
+            }
+            // +98912… و 0912… یک مخاطب‌اند → ۳ گروه (علی، تهران، ناشناس)
+            assertEquals("groups: $titles", 3, titles.size)
+            assertTrue(titles.joinToString().contains("علی"))
+            shot("library_grouped")
+
+            // انتخاب با لمس طولانی، سپس «همه»
+            sc.onActivity {
+                val box = it.findViewById<android.widget.LinearLayout>(R.id.listBox)
+                val row = (0 until box.childCount).map { i -> box.getChildAt(i) }
+                    .first { v -> v.findViewById<View>(R.id.tvInitial) != null && v.findViewById<TextView>(R.id.gTitle) == null }
+                row.performLongClick()
+            }
+            Thread.sleep(500)
+            assertTrue(visible(sc, R.id.selectBar))
+            sc.onActivity { it.findViewById<View>(R.id.btnSelAll).performClick() }
+            Thread.sleep(500)
+            shot("library_selection")
+            sc.onActivity { it.deleteRecordings(listOf(a1, a2)) }
+        }
+        assertFalse(a1.exists()); assertFalse(a2.exists())
+        assertFalse(CallMeta.metaFile(a1).exists()); assertFalse(CallMeta.metaFile(a2).exists())
+        assertTrue(b1.exists() && c1.exists())
     }
 
     @Test

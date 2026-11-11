@@ -340,7 +340,7 @@ class RecorderService : Service() {
     }
 
     private fun openSource(src: Int, sr: Int, bufBytes: Int): Src? {
-        if (Prefs(this).fakeSource) return Src(null, sr)
+        if (BuildConfig.DEBUG && Prefs(this).fakeSource) return Src(null, sr)
         var ar: AudioRecord? = null
         return try {
             ar = AudioRecord(src, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufBytes)
@@ -527,6 +527,15 @@ class RecorderService : Service() {
                 postEvent(false, "صدایی ضبط نشد.\n$hint")
             } else {
                 postEvent(true, "ضبط ذخیره شد (${seconds} ثانیه)")
+                // تاریخچه‌ی تماس چند ثانیه بعد از قطع تماس نوشته می‌شود؛ بعداً مخاطب را پیدا کن
+                val saved = f
+                if (saved != null && CallMeta.hasCallLogPermission(this)) Thread {
+                    for (delay in longArrayOf(4000, 12000)) {
+                        try { Thread.sleep(delay) } catch (_: InterruptedException) {}
+                        CallMeta.resolvePending(applicationContext, listOf(saved))
+                        if (CallMeta.read(saved).resolved) break
+                    }
+                }.start()
             }
             inCall = false
             main.post { afterRecording() }

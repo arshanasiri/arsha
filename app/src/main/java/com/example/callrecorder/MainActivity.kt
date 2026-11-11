@@ -84,6 +84,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statCount: TextView
     private lateinit var statTime: TextView
     private lateinit var statSize: TextView
+    private lateinit var statPeople: TextView
+    private lateinit var selectBar: View
+    private lateinit var tvSelCount: TextView
+    private lateinit var etSearch: EditText
+    private var allRecs: List<Rec> = emptyList()
+    private var query = ""
+    private var dirFilter = DirFilter.ALL
+    private var onlyEnhanced = false
+    private var sortMode = SortMode.NEWEST
+    private var grouped = true
+    private val selected = LinkedHashSet<String>()
+    private val collapsed = HashSet<String>()
+    private var visibleRecs: List<Rec> = emptyList()
 
     // پلیر
     private lateinit var playerBar: View
@@ -111,10 +124,13 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         // میان‌بُرها (برای تست خودکار و شورت‌کات): arm = فعال‌سازی آماده‌باش، skipIntro = بدون راهنمای اول
-        if (intent.getBooleanExtra("skipIntro", false)) prefs.firstRunDone = true
-        if (intent.getBooleanExtra("arm", false)) prefs.autoRecord = true
-        if (intent.getBooleanExtra("fake", false)) prefs.fakeSource = true
-        if (intent.getBooleanExtra("nofake", false)) prefs.fakeSource = false
+        // فقط در نسخه‌ی آزمایشی (debug)؛ در نسخه‌ی انتشار این میان‌بُرها وجود ندارند.
+        if (BuildConfig.DEBUG) {
+            if (intent.getBooleanExtra("skipIntro", false)) prefs.firstRunDone = true
+            if (intent.getBooleanExtra("arm", false)) prefs.autoRecord = true
+            if (intent.getBooleanExtra("fake", false)) prefs.fakeSource = true
+            if (intent.getBooleanExtra("nofake", false)) prefs.fakeSource = false
+        }
 
         bottomNav = findViewById(R.id.bottomNav)
         pageRecord = findViewById(R.id.pageRecord)
@@ -128,13 +144,16 @@ class MainActivity : AppCompatActivity() {
         setupPlayer()
         setupSettingsPage()
 
-        findViewById<MaterialButton>(R.id.btnTheme).setOnClickListener {
-            val night = (resources.configuration.uiMode and
-                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-                android.content.res.Configuration.UI_MODE_NIGHT_YES
-            prefs.themeMode = if (night) 1 else 2
+        val btnTheme = findViewById<MaterialButton>(R.id.btnTheme)
+        btnTheme.setIconResource(if (isNightNow()) R.drawable.ic_sun else R.drawable.ic_moon)
+        btnTheme.setOnClickListener {
+            prefs.themeMode = if (isNightNow()) 1 else 2
+            prefs.lastTab = bottomNav.selectedItemId
             AppCompatDelegate.setDefaultNightMode(Prefs.nightModeFor(prefs.themeMode))
+            recreate()
         }
+        // بعد از تغییر تم صفحه‌ی قبلی را برگردان
+        if (prefs.lastTab != 0) { bottomNav.selectedItemId = prefs.lastTab; prefs.lastTab = 0 }
 
         requestNeededPermissions()
         // اگر حالت آماده‌باش قبلاً فعال بوده، حالا که برنامه روی صفحه است دوباره فعالش کن
@@ -145,6 +164,9 @@ class MainActivity : AppCompatActivity() {
         tick()
         ui.post { showStartupDialogs() }
     }
+
+    private fun isNightNow() = (resources.configuration.uiMode and
+        android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -351,81 +373,301 @@ class MainActivity : AppCompatActivity() {
         emptyView = pageLibrary.findViewById(R.id.emptyView)
         statsCard = pageLibrary.findViewById(R.id.statsCard)
         statCount = pageLibrary.findViewById(R.id.statCount)
+        statPeople = pageLibrary.findViewById(R.id.statPeople)
         statTime = pageLibrary.findViewById(R.id.statTime)
         statSize = pageLibrary.findViewById(R.id.statSize)
-    }
+        selectBar = pageLibrary.findViewById(R.id.selectBar)
+        tvSelCount = pageLibrary.findViewById(R.id.tvSelCount)
+        etSearch = pageLibrary.findViewById(R.id.etSearch)
+        grouped = prefs.libGrouped
+        sortMode = SortMode.values()[prefs.libSort.coerceIn(0, SortMode.values().size - 1)]
 
-    private fun refreshList() {
-        listBox.removeAllViews()
-        val files = RecorderService.recordingsDir(this).listFiles { f -> f.extension == "wav" }
-            ?.sortedByDescending { it.lastModified() } ?: emptyList()
-        emptyView.visibility = if (files.isEmpty()) View.VISIBLE else View.GONE
-        statsCard.visibility = if (files.isEmpty()) View.GONE else View.VISIBLE
-        var totalMs = 0L
-        var totalBytes = 0L
-        val inflater = LayoutInflater.from(this)
-        for (f in files) {
-            val dur = WavWriter.durationMs(f)
-            totalMs += dur
-            totalBytes += f.length()
-            val row = inflater.inflate(R.layout.item_recording, listBox, false)
-            val enhanced = f.name.endsWith("_enhanced.wav")
-            row.findViewById<TextView>(R.id.tvName).text = niceName(f)
-            row.findViewById<TextView>(R.id.tvMeta).text =
-                "\u2066${fmt(dur)} · ${"%.1f".format(f.length() / 1048576.0)} MB\u2069"
-            row.findViewById<View>(R.id.tvTag).visibility = if (enhanced) View.VISIBLE else View.GONE
-
-            val playing = playingPath == f.absolutePath && player?.isPlaying == true
-            row.findViewById<MaterialButton>(R.id.btnPlay).apply {
-                text = if (playing) "توقف موقت" else "پخش"
-                setIconResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
-                setOnClickListener { playFile(f) }
-            }
-            row.findViewById<View>(R.id.btnEnhance).setOnClickListener { showEnhanceSheet(f) }
-            row.findViewById<View>(R.id.btnShare).setOnClickListener { share(f) }
-            row.findViewById<View>(R.id.btnMore).setOnClickListener { v -> showMore(v, f) }
-            listBox.addView(row)
+        etSearch.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(e: android.text.Editable?) { query = e?.toString() ?: ""; renderList() }
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+        })
+        fun chipSetup(id: Int, on: (Boolean) -> Unit) =
+            pageLibrary.findViewById<Chip>(id).setOnCheckedChangeListener { _, c -> on(c) }
+        val chipAll = pageLibrary.findViewById<Chip>(R.id.chipAll)
+        val chipIn = pageLibrary.findViewById<Chip>(R.id.chipIn)
+        val chipOut = pageLibrary.findViewById<Chip>(R.id.chipOut)
+        fun setDir(d: DirFilter) {
+            dirFilter = d
+            chipAll.isChecked = d == DirFilter.ALL
+            chipIn.isChecked = d == DirFilter.INCOMING
+            chipOut.isChecked = d == DirFilter.OUTGOING
+            renderList()
         }
-        statCount.text = files.size.toString()
-        statTime.text = fmt(totalMs)
-        statSize.text = "%.1f MB".format(totalBytes / 1048576.0)
+        chipAll.setOnClickListener { setDir(DirFilter.ALL) }
+        chipIn.setOnClickListener { setDir(if (dirFilter == DirFilter.INCOMING) DirFilter.ALL else DirFilter.INCOMING) }
+        chipOut.setOnClickListener { setDir(if (dirFilter == DirFilter.OUTGOING) DirFilter.ALL else DirFilter.OUTGOING) }
+        chipSetup(R.id.chipEnh) { onlyEnhanced = it; renderList() }
+
+        val btnView = pageLibrary.findViewById<MaterialButton>(R.id.btnViewMode)
+        fun syncViewIcon() {
+            btnView.setIconResource(if (grouped) R.drawable.ic_group else R.drawable.ic_list)
+            btnView.contentDescription = if (grouped) "نمای دسته‌بندی‌شده" else "نمای فهرست"
+        }
+        syncViewIcon()
+        btnView.setOnClickListener {
+            grouped = !grouped; prefs.libGrouped = grouped; syncViewIcon(); renderList()
+            snack(if (grouped) "دسته‌بندی بر اساس مخاطب" else "فهرست زمانی", false)
+        }
+        pageLibrary.findViewById<View>(R.id.btnSort).setOnClickListener { showSortDialog() }
+        pageLibrary.findViewById<View>(R.id.btnPerm).setOnClickListener {
+            requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG), 2)
+        }
+        pageLibrary.findViewById<View>(R.id.btnSelClose).setOnClickListener { clearSelection() }
+        pageLibrary.findViewById<View>(R.id.btnSelAll).setOnClickListener {
+            if (selected.size == visibleRecs.size) selected.clear()
+            else { selected.clear(); visibleRecs.forEach { selected.add(it.path) } }
+            renderList()
+        }
+        pageLibrary.findViewById<View>(R.id.btnSelDelete).setOnClickListener { confirmDeleteSelected() }
+
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (selected.isNotEmpty()) clearSelection()
+                else { isEnabled = false; onBackPressedDispatcher.onBackPressed(); isEnabled = true }
+            }
+        })
     }
 
-    /** عنوان خوانا؛ تاریخ و ساعت داخل یک بلوک چپ‌به‌راست تا ترتیب ارقام به‌هم نریزد. */
+    private fun showSortDialog() {
+        val labels = arrayOf("جدیدترین", "قدیمی‌ترین", "طولانی‌ترین", "پرحجم‌ترین", "نام مخاطب")
+        MaterialAlertDialogBuilder(this)
+            .setTitle("مرتب‌سازی")
+            .setSingleChoiceItems(labels, sortMode.ordinal) { d, which ->
+                sortMode = SortMode.values()[which]; prefs.libSort = which
+                d.dismiss(); renderList()
+            }.show()
+    }
+
+    private fun clearSelection() { selected.clear(); renderList() }
+
+    /** از روی فایل‌ها لیست را می‌خواند (و مخاطب‌های نامشخص را از تاریخچه‌ی تماس پر می‌کند). */
+    private fun refreshList() {
+        val dir = RecorderService.recordingsDir(this)
+        val wavs = dir.listFiles { f -> f.extension == "wav" }?.toList() ?: emptyList()
+        CallMeta.resolvePending(this, wavs)
+        allRecs = wavs.map { f ->
+            val m = CallMeta.read(f)
+            Rec(
+                path = f.absolutePath, fileName = f.name, startMs = CallMeta.startOf(f),
+                durationMs = WavWriter.durationMs(f), sizeBytes = f.length(),
+                number = m.number, name = m.name, direction = m.direction,
+                enhanced = f.name.endsWith("_enhanced.wav"),
+            )
+        }
+        selected.retainAll(allRecs.map { it.path }.toSet())
+        renderList()
+    }
+
+    private fun initialOf(title: String): String {
+        val c = title.trim().firstOrNull { it.isLetter() } ?: return ""
+        return c.uppercaseChar().toString()
+    }
+
+    private fun bindAvatar(frame: View, tv: TextView, img: View, title: String) {
+        val ini = initialOf(title)
+        tv.text = ini
+        tv.visibility = if (ini.isEmpty()) View.GONE else View.VISIBLE
+        img.visibility = if (ini.isEmpty()) View.VISIBLE else View.GONE
+    }
+
+    private fun renderList() {
+        listBox.removeAllViews()
+        val filtered = Library.sort(Library.filter(allRecs, query, dirFilter, onlyEnhanced), sortMode)
+        visibleRecs = filtered
+        val inSel = selected.isNotEmpty()
+        selectBar.visibility = if (inSel) View.VISIBLE else View.GONE
+        tvSelCount.text = "⁦${selected.size}⁩ انتخاب"
+        pageLibrary.findViewById<View>(R.id.libHeader).visibility = if (inSel) View.GONE else View.VISIBLE
+        pageLibrary.findViewById<View>(R.id.permCard).visibility =
+            if (!CallMeta.hasCallLogPermission(this) && allRecs.isNotEmpty()) View.VISIBLE else View.GONE
+
+        val none = filtered.isEmpty()
+        emptyView.visibility = if (none) View.VISIBLE else View.GONE
+        statsCard.visibility = if (allRecs.isEmpty()) View.GONE else View.VISIBLE
+        pageLibrary.findViewById<TextView>(R.id.tvEmptyTitle).text =
+            if (allRecs.isEmpty()) "هنوز ضبطی ندارید" else "موردی پیدا نشد"
+        pageLibrary.findViewById<TextView>(R.id.tvEmptySub).text =
+            if (allRecs.isEmpty()) "از صفحه‌ی «ضبط» اولین مکالمه‌ی خود را ضبط کنید" else "جستجو یا فیلتر را تغییر دهید"
+
+        val inflater = LayoutInflater.from(this)
+        if (grouped) {
+            for (g in Library.groupByContact(filtered, sortMode)) {
+                val h = inflater.inflate(R.layout.item_group_header, listBox, false)
+                h.findViewById<TextView>(R.id.gTitle).text = bidi(g.title)
+                val nums = if (g.subtitle.isNotBlank() && g.subtitle != g.title) "${bidi(g.subtitle)} · " else ""
+                h.findViewById<TextView>(R.id.gSub).text =
+                    "$nums⁦${g.items.size}⁩ ضبط · ⁦${fmt(g.totalMs)}⁩"
+                bindAvatar(h.findViewById(R.id.gAvatar), h.findViewById(R.id.gInitial), h.findViewById(R.id.gPerson), g.title)
+                val isCollapsed = g.key in collapsed
+                h.findViewById<View>(R.id.gChevron).rotation = if (isCollapsed) 90f else 0f
+                h.setOnClickListener {
+                    if (selected.isNotEmpty()) {
+                        val paths = g.items.map { it.path }
+                        if (selected.containsAll(paths)) selected.removeAll(paths.toSet()) else selected.addAll(paths)
+                    } else if (!collapsed.remove(g.key)) collapsed.add(g.key)
+                    renderList()
+                }
+                h.setOnLongClickListener { selected.addAll(g.items.map { it.path }); renderList(); true }
+                listBox.addView(h)
+                if (!isCollapsed) g.items.forEach { listBox.addView(buildRow(inflater, it)) }
+            }
+        } else {
+            filtered.forEach { listBox.addView(buildRow(inflater, it)) }
+        }
+        statCount.text = allRecs.size.toString()
+        statPeople.text = allRecs.map { it.key }.toSet().size.toString()
+        statTime.text = fmt(allRecs.sumOf { it.durationMs })
+        statSize.text = "%.1f MB".format(allRecs.sumOf { it.sizeBytes } / 1048576.0)
+    }
+
+    private fun bidi(t: String) = "⁦$t⁩"
+
+    private fun buildRow(inflater: LayoutInflater, r: Rec): View {
+        val f = File(r.path)
+        val row = inflater.inflate(R.layout.item_recording, listBox, false)
+        val card = row as com.google.android.material.card.MaterialCardView
+        val sel = r.path in selected
+        row.findViewById<TextView>(R.id.tvName).text = bidi(r.title)
+        val date = SimpleDateFormat("yyyy/MM/dd  HH:mm", Locale.US).format(Date(r.startMs))
+        row.findViewById<TextView>(R.id.tvMeta).text =
+            "⁦$date · ${fmt(r.durationMs)} · ${"%.1f".format(r.sizeBytes / 1048576.0)} MB⁩"
+        val dirImg = row.findViewById<ImageView>(R.id.imgDir)
+        when (r.direction) {
+            1 -> dirImg.setImageResource(R.drawable.ic_incoming)
+            2 -> dirImg.setImageResource(R.drawable.ic_outgoing)
+            else -> dirImg.visibility = View.GONE
+        }
+        row.findViewById<View>(R.id.tvTag).visibility = if (r.enhanced) View.VISIBLE else View.GONE
+        bindAvatar(row.findViewById(R.id.avatar), row.findViewById(R.id.tvInitial), row.findViewById(R.id.imgPerson), r.title)
+        row.findViewById<View>(R.id.checkMark).visibility = if (sel) View.VISIBLE else View.GONE
+        card.strokeColor = androidx.core.content.ContextCompat.getColor(this, if (sel) R.color.primary else R.color.outline)
+        card.strokeWidth = if (sel) dp(2) else dp(1)
+
+        val playing = playingPath == r.path && player?.isPlaying == true
+        row.findViewById<MaterialButton>(R.id.btnPlay).apply {
+            setIconResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+            contentDescription = if (playing) "توقف موقت" else "پخش"
+            setOnClickListener { if (selected.isNotEmpty()) toggleSel(r.path) else playFile(f) }
+        }
+        row.findViewById<View>(R.id.btnMore).setOnClickListener { v -> showMore(v, f) }
+        row.setOnClickListener { if (selected.isNotEmpty()) toggleSel(r.path) else playFile(f) }
+        row.setOnLongClickListener { toggleSel(r.path); true }
+        return row
+    }
+
+    private fun toggleSel(path: String) {
+        if (!selected.remove(path)) selected.add(path)
+        renderList()
+    }
+
+    /** عنوان خوانا برای پلیر: نام/شماره + تاریخ */
     private fun niceName(f: File): String {
-        val m = Regex("""call_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})""").find(f.nameWithoutExtension)
-            ?: return f.nameWithoutExtension
-        val (y, mo, d, h, mi, _) = m.destructured
-        return "مکالمه \u2066$y/$mo/$d  $h:$mi\u2069"
+        val m = CallMeta.read(f)
+        val who = m.name.ifBlank { m.number }
+        val d = SimpleDateFormat("yyyy/MM/dd  HH:mm", Locale.US).format(Date(CallMeta.startOf(f)))
+        return if (who.isBlank()) "مکالمه ⁦$d⁩" else "${bidi(who)} · ⁦$d⁩"
     }
 
     private fun showMore(anchor: View, f: File) {
         val m = PopupMenu(this, anchor)
-        m.menu.add(0, 1, 0, "تغییر نام")
-        m.menu.add(0, 2, 1, "ذخیره در پوشه‌ی Music")
-        m.menu.add(0, 3, 2, "اطلاعات فایل")
-        m.menu.add(0, 4, 3, "حذف")
+        m.menu.add(0, 0, 0, "انتخاب برای حذف")
+        m.menu.add(0, 5, 1, "بهبود کیفیت صدا")
+        m.menu.add(0, 6, 2, "اشتراک‌گذاری")
+        m.menu.add(0, 1, 3, "تغییر نام")
+        m.menu.add(0, 7, 4, "ثبت نام/شماره‌ی مخاطب")
+        m.menu.add(0, 2, 5, "ذخیره در پوشه‌ی Music")
+        m.menu.add(0, 3, 6, "اطلاعات فایل")
+        m.menu.add(0, 4, 7, "حذف")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
+                0 -> toggleSel(f.absolutePath)
                 1 -> renameFile(f)
                 2 -> exportToMusic(f)
                 3 -> showInfo(f)
                 4 -> confirmDelete(f)
+                5 -> showEnhanceSheet(f)
+                6 -> share(f)
+                7 -> editContact(f)
             }
             true
         }
         m.show()
     }
 
+    private fun editContact(f: File) {
+        val cur = CallMeta.read(f)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(12), dp(24), 0)
+        }
+        val etName = EditText(this).apply { hint = "نام"; setText(cur.name) }
+        val etNum = EditText(this).apply {
+            hint = "شماره"; setText(cur.number); inputType = android.text.InputType.TYPE_CLASS_PHONE
+        }
+        box.addView(etName); box.addView(etNum)
+        MaterialAlertDialogBuilder(this).setTitle("مخاطب این ضبط").setView(box)
+            .setPositiveButton("ذخیره") { _, _ ->
+                CallMeta.write(f, CallMeta.Info(etNum.text.toString().trim(), etName.text.toString().trim(), cur.direction, true))
+                refreshList()
+            }.setNegativeButton("لغو", null).show()
+    }
+
     private fun confirmDelete(f: File) {
         MaterialAlertDialogBuilder(this)
             .setTitle("حذف ضبط")
-            .setMessage("این فایل برای همیشه حذف شود؟")
+            .setMessage("فایل صوتی برای همیشه از گوشی پاک می‌شود.")
             .setPositiveButton("حذف") { _, _ ->
-                if (playingPath == f.absolutePath) closePlayer()
-                f.delete(); refreshList()
+                deleteRecordings(listOf(f)); refreshList()
             }
             .setNegativeButton("لغو", null).show()
+    }
+
+    private fun confirmDeleteSelected() {
+        val files = selected.map { File(it) }
+        if (files.isEmpty()) return
+        MaterialAlertDialogBuilder(this)
+            .setTitle("حذف ⁦${files.size}⁩ ضبط")
+            .setMessage("فایل‌های صوتی انتخاب‌شده برای همیشه از گوشی پاک می‌شوند و قابل بازگشت نیستند.")
+            .setPositiveButton("حذف همه") { _, _ ->
+                val n = deleteRecordings(files)
+                selected.clear(); refreshList()
+                snack("⁦$n⁩ ضبط حذف شد", false)
+            }
+            .setNegativeButton("لغو", null).show()
+    }
+
+    /** فایل wav + اطلاعات مخاطب + نسخه‌ی خروجی‌گرفته در Music را کامل پاک می‌کند. */
+    internal fun deleteRecordings(files: List<File>): Int {
+        var n = 0
+        for (f in files) {
+            if (playingPath == f.absolutePath) closePlayer()
+            val ok = !f.exists() || f.delete()
+            CallMeta.metaFile(f).delete()
+            deleteExportedCopies(f.name)
+            if (ok) n++
+        }
+        return n
+    }
+
+    private fun deleteExportedCopies(displayName: String) {
+        if (Build.VERSION.SDK_INT < 29) return
+        try {
+            val uris = ArrayList<Uri>()
+            contentResolver.query(
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Audio.Media._ID),
+                "${MediaStore.Audio.Media.DISPLAY_NAME}=? AND ${MediaStore.Audio.Media.RELATIVE_PATH} LIKE ?",
+                arrayOf(displayName, "Music/CallRecorder%"), null
+            )?.use { c ->
+                while (c.moveToNext())
+                    uris.add(android.content.ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, c.getLong(0)))
+            }
+            for (u in uris) try { contentResolver.delete(u, null, null) } catch (_: Throwable) {}
+        } catch (_: Throwable) {}
     }
 
     private fun renameFile(f: File) {
@@ -445,6 +687,7 @@ class MainActivity : AppCompatActivity() {
                     target.exists() && target != f -> snack("فایلی با این نام وجود دارد")
                     f.renameTo(target) -> {
                         if (playingPath == f.absolutePath) closePlayer()
+                        CallMeta.metaFile(f).renameTo(CallMeta.metaFile(target))
                         refreshList()
                     }
                     else -> snack("تغییر نام ممکن نشد")
@@ -913,11 +1156,14 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) need += Manifest.permission.POST_NOTIFICATIONS
+        if (checkSelfPermission(Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED)
+            need += Manifest.permission.READ_CALL_LOG
         if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 1)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (::pageLibrary.isInitialized) refreshList()
         val micIdx = permissions.indexOf(Manifest.permission.RECORD_AUDIO)
         if (micIdx >= 0 && grantResults.getOrNull(micIdx) != PackageManager.PERMISSION_GRANTED) {
             MaterialAlertDialogBuilder(this)

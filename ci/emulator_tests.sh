@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # اجرا داخل شبیه‌ساز اندروید (reactivecircus/android-emulator-runner)
 set -u
-PKG=com.example.callrecorder
+PKG=ir.nasirzadeh.callrecorder
+NS=com.example.callrecorder
 OUT=ci-out
 mkdir -p "$OUT/shots" "$OUT/reports"
 FAIL=0
@@ -34,12 +35,12 @@ if ! gradle :app:installDebug --no-daemon -q > "$OUT/gradle-install.log" 2>&1; t
   cat "$OUT/gradle-install.log" | tail -20
   exit 1
 fi
-for p in RECORD_AUDIO READ_PHONE_STATE POST_NOTIFICATIONS; do
+for p in RECORD_AUDIO READ_PHONE_STATE READ_CALL_LOG POST_NOTIFICATIONS; do
   adb shell pm grant "$PKG" "android.permission.$p" > /dev/null 2>&1
 done
 adb shell cmd uimode night no > /dev/null 2>&1
 
-adb shell am start -n "$PKG/.MainActivity" --ez arm true --ez skipIntro true --ez fake true > /dev/null
+adb shell am start -n "$PKG/$NS.MainActivity" --ez arm true --ez skipIntro true --ez fake true > /dev/null
 sleep 6
 adb exec-out screencap -p > "$OUT/shots/call_1_armed.png"
 if adb shell dumpsys activity services "$PKG" | grep -q "RecorderService"; then
@@ -86,7 +87,7 @@ fi
 adb shell "ls -la /sdcard/Android/data/$PKG/files/Recordings/" 2>&1 | tee -a "$OUT/summary.txt" || true
 
 # ---------------------------------------------------------------- 3) عکس از برنامه پس از تماس
-adb shell am start -n "$PKG/.MainActivity" > /dev/null
+adb shell am start -n "$PKG/$NS.MainActivity" > /dev/null
 sleep 3
 adb exec-out screencap -p > "$OUT/shots/call_3_after_call.png"
 
@@ -95,7 +96,7 @@ run_call_experiment() {
   local label="$1"
   adb shell am force-stop "$PKG"
   adb logcat -c
-  adb shell am start -n "$PKG/.MainActivity" --ez arm true --ez skipIntro true --ez nofake true > /dev/null
+  adb shell am start -n "$PKG/$NS.MainActivity" --ez arm true --ez skipIntro true --ez nofake true > /dev/null
   sleep 5
   adb shell input keyevent KEYCODE_HOME
   sleep 2
@@ -111,11 +112,41 @@ run_call_experiment() {
 }
 adb shell settings put secure enabled_accessibility_services "" > /dev/null 2>&1
 run_call_experiment "real-mic_a11y-OFF"
-adb shell settings put secure enabled_accessibility_services "$PKG/$PKG.CallAccessibilityService" > /dev/null 2>&1
+adb shell settings put secure enabled_accessibility_services "$PKG/$NS.CallAccessibilityService" > /dev/null 2>&1
 adb shell settings put secure accessibility_enabled 1 > /dev/null 2>&1
 sleep 3
 run_call_experiment "real-mic_a11y-ON"
 adb shell settings put secure enabled_accessibility_services "" > /dev/null 2>&1
 
 note "=== done, FAIL=$FAIL ==="
+
+# ---------------------------------------------------------------- 5) نسخه‌ی انتشار (R8 + امضا) روی دستگاه
+REL=app/build/outputs/apk/release/app-release.apk
+if [ -f "$REL" ]; then
+  adb uninstall "$PKG" > /dev/null 2>&1
+  adb logcat -c
+  if adb install -r "$REL" > "$OUT/release-install.txt" 2>&1; then
+    for p in RECORD_AUDIO READ_PHONE_STATE READ_CALL_LOG POST_NOTIFICATIONS; do
+      adb shell pm grant "$PKG" "android.permission.$p" > /dev/null 2>&1
+    done
+    adb shell am start -n "$PKG/$NS.MainActivity" > /dev/null
+    sleep 6
+    adb shell screencap -p /data/local/tmp/shots/release_launch.png && adb pull /data/local/tmp/shots/release_launch.png "$OUT/shots/" > /dev/null 2>&1
+    adb shell am startservice -n "$PKG/$NS.RecorderService" -a "$NS.ARM" > /dev/null 2>&1
+    sleep 3
+    adb logcat -d -v time > "$OUT/logcat-release.txt" 2>&1
+    PID="$(adb shell pidof "$PKG" | tr -d '\r')"
+    if [ -n "$PID" ] && ! grep -q "FATAL EXCEPTION" "$OUT/logcat-release.txt"; then
+      pass "release APK (R8, signed) launches and stays alive"
+    else
+      fail "release APK crashed or died"
+      grep -B2 -A12 "FATAL EXCEPTION" "$OUT/logcat-release.txt" | head -40 | tee -a "$OUT/summary.txt"
+    fi
+  else
+    fail "release APK install: $(cat "$OUT/release-install.txt")"
+  fi
+else
+  note "release APK not present; skipped"
+fi
+
 exit $FAIL

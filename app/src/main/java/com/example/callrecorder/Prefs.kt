@@ -42,6 +42,19 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("themeMode", 0)
         set(v) = sp.edit().putInt("themeMode", v).apply()
 
+    var libGrouped: Boolean
+        get() = sp.getBoolean("libGrouped", true)
+        set(v) = sp.edit().putBoolean("libGrouped", v).apply()
+
+    var libSort: Int
+        get() = sp.getInt("libSort", 0)
+        set(v) = sp.edit().putInt("libSort", v).apply()
+
+    /** برای برگشت به همان صفحه بعد از تغییر تم (0 = هیچ) */
+    var lastTab: Int
+        get() = sp.getInt("lastTab", 0)
+        set(v) = sp.edit().putInt("lastTab", v).apply()
+
     companion object {
         fun nightModeFor(mode: Int): Int = when (mode) {
             1 -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO

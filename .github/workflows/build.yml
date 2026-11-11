@@ -31,12 +31,47 @@ jobs:
         with:
           name: unit-test-report
           path: app/build/reports/tests/testDebugUnitTest
+      - name: Prepare signing key
+        id: key
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS_S: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KEY_ALIAS_S" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "official=true" >> "$GITHUB_OUTPUT"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$KEY_ALIAS_S" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${KEY_PASS:-$KS_PASS}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Release signing secrets are not set. Building with a THROWAWAY key (not for store upload)."
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -storepass throwaway1 -keypass throwaway1 \
+              -alias throwaway -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Throwaway CI, O=CI"
+            echo "official=false" >> "$GITHUB_OUTPUT"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=throwaway1" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=throwaway" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=throwaway1" >> "$GITHUB_ENV"
+          fi
       - name: Build release APK
         run: gradle :app:assembleRelease --no-daemon
+      - name: Verify signature (must not be a debug key)
+        run: |
+          APKSIGNER="$(ls $ANDROID_HOME/build-tools/*/apksigner | sort | tail -1)"
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk | tee sig.txt
+          grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" sig.txt
+          if grep -qi "CN=Android Debug" sig.txt; then echo "APK is signed with the DEBUG key"; exit 1; fi
+          echo "official=${{ steps.key.outputs.official }}" > official.txt
       - uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: app/build/outputs/apk/release/app-release.apk
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/mapping/release/mapping.txt
+            official.txt
 
   emulator:
     name: Emulator tests (Android 14)
@@ -58,6 +93,33 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
+      - name: Prepare signing key
+        id: key
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS_S: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KEY_ALIAS_S" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "official=true" >> "$GITHUB_OUTPUT"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$KEY_ALIAS_S" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${KEY_PASS:-$KS_PASS}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Release signing secrets are not set. Building with a THROWAWAY key (not for store upload)."
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -storepass throwaway1 -keypass throwaway1 \
+              -alias throwaway -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Throwaway CI, O=CI"
+            echo "official=false" >> "$GITHUB_OUTPUT"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=throwaway1" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=throwaway" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=throwaway1" >> "$GITHUB_ENV"
+          fi
+      - name: Build release APK for device check
+        run: gradle :app:assembleRelease --no-daemon -q
       - name: Run tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -87,7 +149,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app-release.apk CallRecorder.apk
-          gh release create "v2.1-${{ github.run_number }}" CallRecorder.apk \
-            --title "Call Recorder Pro v2.1 (build ${{ github.run_number }})" \
-            --notes "APK built and tested (unit tests + Android 14 emulator tests)."
+          OFFICIAL="$(cut -d= -f2 official.txt)"
+          if [ "$OFFICIAL" = "true" ]; then
+            cp app-release.apk CallRecorder.apk
+            TAG="v2.2-${{ github.run_number }}"
+            NOTES="Signed with the release key (Bazaar-ready). Unit tests + Android 14 emulator tests passed."
+            gh release create "$TAG" CallRecorder.apk --title "Call Recorder Pro v2.2 (build ${{ github.run_number }})" --notes "$NOTES"
+          else
+            cp app-release.apk CallRecorder-UNOFFICIAL-throwaway-key.apk
+            TAG="v2.2-test-${{ github.run_number }}"
+            NOTES="Signed with a THROWAWAY key: installable for testing, but do NOT upload to Bazaar. Add the 4 signing secrets (KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD) to get an official build."
+            gh release create "$TAG" CallRecorder-UNOFFICIAL-throwaway-key.apk --prerelease --title "Call Recorder Pro v2.2 TEST (build ${{ github.run_number }})" --notes "$NOTES"
+          fi

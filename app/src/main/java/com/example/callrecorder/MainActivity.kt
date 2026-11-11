@@ -114,6 +114,7 @@ class MainActivity : AppCompatActivity() {
         if (intent.getBooleanExtra("skipIntro", false)) prefs.firstRunDone = true
         if (intent.getBooleanExtra("arm", false)) prefs.autoRecord = true
         if (intent.getBooleanExtra("fake", false)) prefs.fakeSource = true
+        if (intent.getBooleanExtra("nofake", false)) prefs.fakeSource = false
 
         bottomNav = findViewById(R.id.bottomNav)
         pageRecord = findViewById(R.id.pageRecord)

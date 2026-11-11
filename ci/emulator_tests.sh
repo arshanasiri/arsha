@@ -11,6 +11,9 @@ pass() { note "PASS: $*"; }
 
 note "device: $(adb shell getprop ro.product.model | tr -d '\r') api=$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
 
+# جلوگیری از پنجره‌های خطای سیستمی (مثلاً ANR لانچر روی شبیه‌ساز کند) که روی عکس‌ها می‌افتند
+adb shell settings put global hide_error_dialogs 1 > /dev/null 2>&1
+
 # ---------------------------------------------------------------- 1) تست‌های ابزاردار
 adb logcat -c
 if gradle :app:connectedDebugAndroidTest --no-daemon --stacktrace > "$OUT/gradle-instrumented.log" 2>&1; then
@@ -86,6 +89,33 @@ adb shell "ls -la /sdcard/Android/data/$PKG/files/Recordings/" 2>&1 | tee -a "$O
 adb shell am start -n "$PKG/.MainActivity" > /dev/null
 sleep 3
 adb exec-out screencap -p > "$OUT/shots/call_3_after_call.png"
+
+# ---------------------------------------------------------------- 4) آزمایش: میکروفون واقعی در تماس، با و بدون سرویس دسترسی
+run_call_experiment() {
+  local label="$1"
+  adb shell am force-stop "$PKG"
+  adb logcat -c
+  adb shell am start -n "$PKG/.MainActivity" --ez arm true --ez skipIntro true --ez nofake true > /dev/null
+  sleep 5
+  adb shell input keyevent KEYCODE_HOME
+  sleep 2
+  adb emu gsm call 5551234 > /dev/null 2>&1
+  sleep 2
+  adb emu gsm accept 5551234 > /dev/null 2>&1
+  sleep 14
+  adb emu gsm cancel 5551234 > /dev/null 2>&1
+  sleep 5
+  adb logcat -d -v time > "$OUT/logcat-experiment-$label.txt" 2>&1
+  note "EXPERIMENT [$label]:"
+  grep -a "CallRecorder.*event ok=" "$OUT/logcat-experiment-$label.txt" | tail -1 | cut -c1-700 | tee -a "$OUT/summary.txt"
+}
+adb shell settings put secure enabled_accessibility_services "" > /dev/null 2>&1
+run_call_experiment "real-mic_a11y-OFF"
+adb shell settings put secure enabled_accessibility_services "$PKG/$PKG.CallAccessibilityService" > /dev/null 2>&1
+adb shell settings put secure accessibility_enabled 1 > /dev/null 2>&1
+sleep 3
+run_call_experiment "real-mic_a11y-ON"
+adb shell settings put secure enabled_accessibility_services "" > /dev/null 2>&1
 
 note "=== done, FAIL=$FAIL ==="
 exit $FAIL

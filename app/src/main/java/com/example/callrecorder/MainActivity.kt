@@ -893,6 +893,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         val group = s.findViewById<MaterialButtonToggleGroup>(R.id.toggleTheme)
+        // مهم: وضعیت ذخیره‌شده‌ی دکمه‌ها بعد از ساخت دوباره‌ی صفحه برنمی‌گردد
+        // (وگرنه تم بلافاصله به «سیستم» برمی‌گشت و دکمه‌ی روز/شب کار نمی‌کرد)
+        group.isSaveEnabled = false
+        for (i in 0 until group.childCount) group.getChildAt(i).isSaveEnabled = false
         group.check(
             when (prefs.themeMode) { 1 -> R.id.btnThemeLight; 2 -> R.id.btnThemeDark; else -> R.id.btnThemeSystem }
         )

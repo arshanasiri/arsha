@@ -263,7 +263,14 @@ class AppSmokeTest {
             assertFalse("should start light", isNight(sc))
             selectTab(sc, R.id.nav_library)
             sc.onActivity { it.findViewById<View>(R.id.btnTheme).performClick() }
-            assertTrue("dark after 1st click", waitFor(6000) { isNight(sc) })
+            val ok1 = waitFor(8000) { isNight(sc) }
+            var diag = ""
+            sc.onActivity {
+                diag = "themeMode=${Prefs(it).themeMode} delegate=${androidx.appcompat.app.AppCompatDelegate.getDefaultNightMode()} " +
+                    "uiMode=${it.resources.configuration.uiMode} app=${ctx.resources.configuration.uiMode}"
+            }
+            shot("theme_after_click1")
+            assertTrue("dark after 1st click: $diag", ok1)
             Thread.sleep(600)
             assertTrue("tab kept after theme change", visible(sc, R.id.pageLibrary))
             shot("theme_toggled_dark")

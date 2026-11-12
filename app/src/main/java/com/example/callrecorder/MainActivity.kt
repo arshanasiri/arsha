@@ -150,7 +150,6 @@ class MainActivity : AppCompatActivity() {
             prefs.themeMode = if (isNightNow()) 1 else 2
             prefs.lastTab = bottomNav.selectedItemId
             AppCompatDelegate.setDefaultNightMode(Prefs.nightModeFor(prefs.themeMode))
-            recreate()
         }
         // بعد از تغییر تم صفحه‌ی قبلی را برگردان
         if (prefs.lastTab != 0) { bottomNav.selectedItemId = prefs.lastTab; prefs.lastTab = 0 }
@@ -515,7 +514,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 h.setOnLongClickListener { selected.addAll(g.items.map { it.path }); renderList(); true }
                 listBox.addView(h)
-                if (!isCollapsed) g.items.forEach { listBox.addView(buildRow(inflater, it)) }
+                if (!isCollapsed) g.items.forEach { listBox.addView(buildRow(inflater, it, true)) }
             }
         } else {
             filtered.forEach { listBox.addView(buildRow(inflater, it)) }
@@ -528,7 +527,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun bidi(t: String) = "⁦$t⁩"
 
-    private fun buildRow(inflater: LayoutInflater, r: Rec): View {
+    private fun buildRow(inflater: LayoutInflater, r: Rec, inGroup: Boolean = false): View {
         val f = File(r.path)
         val row = inflater.inflate(R.layout.item_recording, listBox, false)
         val card = row as com.google.android.material.card.MaterialCardView

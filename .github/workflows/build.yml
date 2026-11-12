@@ -149,14 +149,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          OFFICIAL="$(cut -d= -f2 official.txt)"
+          APK="$(find . -name app-release.apk | head -1)"
+          OFFICIAL="$(cut -d= -f2 "$(find . -name official.txt | head -1)")"
           if [ "$OFFICIAL" = "true" ]; then
-            cp app-release.apk CallRecorder.apk
+            cp "$APK" CallRecorder.apk
             TAG="v2.2-${{ github.run_number }}"
             NOTES="Signed with the release key (Bazaar-ready). Unit tests + Android 14 emulator tests passed."
             gh release create "$TAG" CallRecorder.apk --title "Call Recorder Pro v2.2 (build ${{ github.run_number }})" --notes "$NOTES"
           else
-            cp app-release.apk CallRecorder-UNOFFICIAL-throwaway-key.apk
+            cp "$APK" CallRecorder-UNOFFICIAL-throwaway-key.apk
             TAG="v2.2-test-${{ github.run_number }}"
             NOTES="Signed with a THROWAWAY key: installable for testing, but do NOT upload to Bazaar. Add the 4 signing secrets (KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD) to get an official build."
             gh release create "$TAG" CallRecorder-UNOFFICIAL-throwaway-key.apk --prerelease --title "Call Recorder Pro v2.2 TEST (build ${{ github.run_number }})" --notes "$NOTES"
